@@ -1,0 +1,4 @@
+include README.rst
+#include bossbrain/data/*
+
+prune build
