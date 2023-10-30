@@ -11,9 +11,9 @@ from . import utils
 
 cspeed = 2.99792458e5  # speed of light in km/s
 
-class JWSTANNModel():
+class BOSSANNModel():
 
-    # Model JWST nirspec spectra using ANN model
+    # Model BOSS nirspec spectra using ANN model
     
     def __init__(self,spobs=None,loggrelation=False,verbose=False):
         # Load the ANN models
@@ -187,7 +187,7 @@ class JWSTANNModel():
         return pars
 
     def fiducialspec(self):
-        """ Default JWST resolution and wavelength spectrum."""
+        """ Default BOSS resolution and wavelength spectrum."""
         # Default observed spectrum            
         wobs_coef = np.array([-1.51930967e-09, -5.46761333e-06,  2.39684716e+00,  8.99994494e+03])            
         # 3847 observed pixels
@@ -201,7 +201,7 @@ class JWSTANNModel():
     def __call__(self,pars=None,spobs=None,snr=None,vrel=None,normalize=False,
                  fiducial=False):
         """
-        Returns JWST model spectrum.
+        Returns BOSS model spectrum.
 
         Parameters
         ----------
@@ -216,12 +216,12 @@ class JWSTANNModel():
         normalize : bool, optional
            Perform continuum normalization on the spectrum.
         fiducial : bool, optional
-           Use fiducial JWST resolution and wavelength values.
+           Use fiducial BOSS resolution and wavelength values.
 
         Returns
         -------
         spec : Spec1D
-           JWST model spectrum.
+           BOSS model spectrum.
 
         Example
         -------
@@ -333,7 +333,7 @@ class JWSTANNModel():
         Example
         -------
 
-        jac = JWSTSyn.jac(wave,*pars)
+        jac = BOSSSyn.jac(wave,*pars)
 
         """
 
