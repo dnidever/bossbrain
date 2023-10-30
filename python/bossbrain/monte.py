@@ -7,6 +7,7 @@ from astropy.table import Table
 from scipy.optimize import curve_fit
 from theborg.emulator import Emulator
 from doppler.spec1d import Spec1D
+import doppler
 import traceback
 from . import utils
 
@@ -16,10 +17,11 @@ class JWSTSyn():
     
     def __init__(self,spobs=None,loggrelation=False,verbose=False):
         # Load the ANN models
-        em1 = Emulator.read(utils.datadir()+'ann_29pars_3500-4200.pkl')
-        em2 = Emulator.read(utils.datadir()+'ann_29pars_4000-5000.pkl')
-        em3 = Emulator.read(utils.datadir()+'ann_29pars_4900-6000.pkl')
-        self._models = [em1,em2,em3]
+        #em1 = Emulator.read(utils.datadir()+'ann_21pars_3500-4200.pkl')
+        em2 = Emulator.read(utils.datadir()+'ann_21pars_4000-5000.pkl')
+        #em3 = Emulator.read(utils.datadir()+'ann_21pars_4900-6000.pkl')
+        #self._models = [em1,em2,em3]
+        self._models = [em2]        
         self.nmodels = len(self._models)
         self.labels = self._models[0].label_names
         self.nlabels = len(self.labels)
@@ -28,10 +30,10 @@ class JWSTSyn():
             for j in range(self.nlabels):
                 self._ranges[i,j,:] = [np.min(self._models[i].training_labels[:,j]),
                                        np.max(self._models[i].training_labels[:,j])]
-        self._ranges[0,0,1] = 4100.0  # use 3500-4200 model up to 4100
-        self._ranges[1,0,0] = 4100.0  # use 4000-5000 model from 4100 to 4950
-        self._ranges[1,0,1] = 4950.0        
-        self._ranges[2,0,0] = 4950.0  # use 4900-6000 model from 4950
+        #self._ranges[0,0,1] = 4100.0  # use 3500-4200 model up to 4100
+        #self._ranges[1,0,0] = 4100.0  # use 4000-5000 model from 4100 to 4950
+        #self._ranges[1,0,1] = 4950.0        
+        #self._ranges[2,0,0] = 4950.0  # use 4900-6000 model from 4950
         self.ranges = np.zeros((self.nlabels,2),float)
         for i in range(self.nlabels):            
             self.ranges[i,:] = [np.max(self._ranges[:,i,0]),np.min(self._ranges[:,i,1])]
@@ -48,18 +50,14 @@ class JWSTSyn():
             self._spobs = spobs
         # Default observed spectrum            
         else:
-            wobs_coef = np.array([-1.51930967e-09, -5.46761333e-06,  2.39684716e+00,  8.99994494e+03])            
-            # 3847 observed pixels
-            npix_obs = 3847
-            wobs = np.polyval(wobs_coef,np.arange(npix_obs))
-            spobs = Spec1D(np.zeros(npix_obs),wave=wobs,err=np.ones(npix_obs),
-                           lsfpars=np.array([ 1.05094118e+00, -3.37514635e-06]),
-                           lsftype='Gaussian',lsfxtype='wave')        
+            sp = doppler.read(doppler.utils.datadir()+'spec-3586-55181-0500.fits')
+            sp.flux = np.zeros(sp.npix)
+            sp.err = np.ones(sp.npix)            
             self._spobs = spobs
 
         # Synthetic wavelengths
-        npix_syn = 22001
-        self._wsyn = np.arange(npix_syn)*0.5+9000
+        npix_syn = 14001
+        self._wsyn = np.arange(npix_syn)*0.5+3500.0
 
         # Get logg label
         loggind, = np.where(np.char.array(self.labels).lower()=='logg')
