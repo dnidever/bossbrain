@@ -11,7 +11,7 @@ import doppler
 import traceback
 from . import utils
 
-class JWSTSyn():
+class BOSSSyn():
 
     # model BOSS nirspec spectra
     
@@ -50,7 +50,7 @@ class JWSTSyn():
             self._spobs = spobs
         # Default observed spectrum            
         else:
-            sp = doppler.read(doppler.utils.datadir()+'spec-3586-55181-0500.fits')
+            sp = doppler.read(utils.datadir()+'spec-3586-55181-0500.fits')
             sp.flux = np.zeros(sp.npix)
             sp.err = np.ones(sp.npix)            
             self._spobs = spobs
@@ -535,7 +535,7 @@ def monte(params=None,nmonte=50,snr=50,initgrid=True,verbose=True):
     """ Simple Monte Carlo test to recover elemental abundances."""
 
     # Initialize BOSS spectral simulation object
-    jw = BOSSSyn()
+    bsyn = BOSSSyn()
 
     if params is None:
         params = {'teff':4000.0,'logg':2.0,'mh':0.0,'cm':0.1}
@@ -549,9 +549,9 @@ def monte(params=None,nmonte=50,snr=50,initgrid=True,verbose=True):
     tab = np.zeros(nmonte,dtype=np.dtype(dt))
     for i in range(nmonte):
         print('---- Mock {:d} ----'.format(i+1))
-        sp = jw(params,snr=snr)
+        sp = bsyn(params,snr=snr)
         try:
-            out = jw.fit(sp,fitparams=fitparams,initgrid=initgrid,verbose=verbose)
+            out = bsyn.fit(sp,fitparams=fitparams,initgrid=initgrid,verbose=verbose)
             tab['ind'][i] = i+1
             tab['snr'][i] = out['snr']
             tab['truepars'][i] = truepars
