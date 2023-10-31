@@ -17,11 +17,10 @@ class BOSSSyn():
     
     def __init__(self,spobs=None,loggrelation=False,verbose=False):
         # Load the ANN models
-        #em1 = Emulator.read(utils.datadir()+'ann_21pars_3500-4200.pkl')
+        em1 = Emulator.read(utils.datadir()+'ann_21pars_3500-4200.pkl')
         em2 = Emulator.read(utils.datadir()+'ann_21pars_4000-5000.pkl')
-        #em3 = Emulator.read(utils.datadir()+'ann_21pars_4900-6000.pkl')
-        #self._models = [em1,em2,em3]
-        self._models = [em2]        
+        em3 = Emulator.read(utils.datadir()+'ann_21pars_4900-6000.pkl')
+        self._models = [em1,em2,em3]
         self.nmodels = len(self._models)
         self.labels = self._models[0].label_names
         self.nlabels = len(self.labels)
@@ -30,10 +29,10 @@ class BOSSSyn():
             for j in range(self.nlabels):
                 self._ranges[i,j,:] = [np.min(self._models[i].training_labels[:,j]),
                                        np.max(self._models[i].training_labels[:,j])]
-        #self._ranges[0,0,1] = 4100.0  # use 3500-4200 model up to 4100
-        #self._ranges[1,0,0] = 4100.0  # use 4000-5000 model from 4100 to 4950
-        #self._ranges[1,0,1] = 4950.0        
-        #self._ranges[2,0,0] = 4950.0  # use 4900-6000 model from 4950
+        self._ranges[0,0,1] = 4100.0  # use 3500-4200 model up to 4100
+        self._ranges[1,0,0] = 4100.0  # use 4000-5000 model from 4100 to 4950
+        self._ranges[1,0,1] = 4950.0        
+        self._ranges[2,0,0] = 4950.0  # use 4900-6000 model from 4950
         self.ranges = np.zeros((self.nlabels,2),float)
         for i in range(self.nlabels):            
             self.ranges[i,:] = [np.max(self._ranges[:,i,0]),np.min(self._ranges[:,i,1])]
@@ -50,9 +49,9 @@ class BOSSSyn():
             self._spobs = spobs
         # Default observed spectrum            
         else:
-            sp = doppler.read(utils.datadir()+'spec-3586-55181-0500.fits')
-            sp.flux = np.zeros(sp.npix)
-            sp.err = np.ones(sp.npix)            
+            spobs = doppler.read(utils.datadir()+'spec-3586-55181-0500.fits')
+            spobs.flux = np.zeros(spobs.npix)
+            spobs.err = np.ones(spobs.npix)            
             self._spobs = spobs
 
         # Synthetic wavelengths
@@ -78,7 +77,7 @@ class BOSSSyn():
         """ Make the labels array from a dictionary."""
         # Dictionary input
         if type(pars) is dict:
-            labels = np.zeros(28)
+            labels = np.zeros(self.nlabels)
             # Must at least have Teff and logg
             for k in pars.keys():
                 if k=='alpham':   # mean alpha
