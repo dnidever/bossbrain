@@ -17,9 +17,9 @@ class BOSSANNModel():
     
     def __init__(self,spobs=None,loggrelation=False,verbose=False):
         # Load the ANN models
-        em1 = Emulator.read(utils.datadir()+'ann_29pars_3500-4200.pkl')
-        em2 = Emulator.read(utils.datadir()+'ann_29pars_4000-5000.pkl')
-        em3 = Emulator.read(utils.datadir()+'ann_29pars_4900-6000.pkl')
+        em1 = Emulator.read(utils.datadir()+'ann_21pars_3500-4200.pkl')
+        em2 = Emulator.read(utils.datadir()+'ann_21pars_4000-5000.pkl')
+        em3 = Emulator.read(utils.datadir()+'ann_21pars_4900-6000.pkl')
         self._models = [em1,em2,em3]
         self.nmodels = len(self._models)
         self.labels = self._models[0].label_names
@@ -34,7 +34,9 @@ class BOSSANNModel():
         self._ranges[1,0,1] = 4950.0        
         self._ranges[2,0,0] = 4950.0  # use 4900-6000 model from 4950
         self.ranges = np.zeros((self.nlabels,2),float)
-        for i in range(self.nlabels):
+            self.ranges[0,0] = np.min(self._ranges[:,0,:])
+        self.ranges[0,1] = np.max(self._ranges[:,0,:])        
+        for i in np.arange(1,self.nlabels):            
             self.ranges[i,:] = [np.max(self._ranges[:,i,0]),np.min(self._ranges[:,i,1])]
         
         # Alpha element index
@@ -43,13 +45,20 @@ class BOSSANNModel():
             if l in ['om','cam','mgm','tim','sm','sim']:
                 alphaindex.append(i)
         self._alphaindex = np.array(alphaindex)
-        
+
         # Input observed spectrum information
-        self._spobs = spobs
+        if spobs is not None:
+            self._spobs = spobs
+        # Default observed spectrum            
+        else:
+            spobs = doppler.read(utils.datadir()+'spec-3586-55181-0500.fits')
+            spobs.flux = np.zeros(spobs.npix)
+            spobs.err = np.ones(spobs.npix)            
+            self._spobs = spobs
             
         # ANN model wavelengths
-        npix_model = 22001
-        self._dispersion = np.arange(npix_model)*0.5+9000
+        npix_model = 14001
+        self._dispersion = np.arange(npix_model)*0.5+3500.0
 
         # Get logg label
         loggind, = np.where(np.char.array(self.labels).lower()=='logg')
@@ -168,23 +177,28 @@ class BOSSANNModel():
             else:
                 print('{:6s}: {:10.4f} +/- {:5.3g}'.format(name,pars[i],perror[i]))
 
-    def randompars(self,labels=None,n=100):
+    def randompars(self,params=None,n=100):
         """ Create random parameters for initial guesses."""
-        if labels is None:
-            labels = self.labels
-        nlabels = len(labels)
-        pars = np.zeros((n,nlabels),float)
-        for i in range(nlabels):
-            ind, = np.where(np.array(self.labels)==labels[i])
-            vmin = self.ranges[ind,0]
-            vmax = self.ranges[ind,1]
+        if params is None:
+            params = self.labels
+        nparams = len(params)
+        rndpars = np.zeros((n,nparams),float)
+        for i in range(nparams):
+            if params[i]!='alpham':
+                ind, = np.where(np.array(self.labels)==params[i])
+                vmin = self.ranges[ind,0]
+                vmax = self.ranges[ind,1]                
+            else:
+                ind = self._alphaindex.copy()
+                vmin = np.max(self.ranges[ind,0])
+                vmax = np.min(self.ranges[ind,1])
             vrange = vmax-vmin
             # make a small buffer
             vmin += vrange*0.01
             vrange *= 0.98
-            pars[:,i] = np.random.rand(n)*vrange+vmin
+            rndpars[:,i] = np.random.rand(n)*vrange+vmin
 
-        return pars
+        return rndpars
 
     def fiducialspec(self):
         """ Default BOSS resolution and wavelength spectrum."""

@@ -34,7 +34,9 @@ class BOSSSyn():
         self._ranges[1,0,1] = 4950.0        
         self._ranges[2,0,0] = 4950.0  # use 4900-6000 model from 4950
         self.ranges = np.zeros((self.nlabels,2),float)
-        for i in range(self.nlabels):            
+        self.ranges[0,0] = np.min(self._ranges[:,0,:])
+        self.ranges[0,1] = np.max(self._ranges[:,0,:])        
+        for i in np.arange(1,self.nlabels):            
             self.ranges[i,:] = [np.max(self._ranges[:,i,0]),np.min(self._ranges[:,i,1])]
         
         # alpha element indexes
@@ -172,23 +174,28 @@ class BOSSSyn():
             else:
                 print('{:6s}: {:10.4f} +/- {:5.3g}'.format(name,pars[i],perror[i]))
 
-    def randompars(self,labels=None,n=100):
+    def randompars(self,params=None,n=100):
         """ Create random parameters for initial guesses."""
-        if labels is None:
-            labels = self.labels
-        nlabels = len(labels)
-        pars = np.zeros((n,nlabels),float)
-        for i in range(nlabels):
-            ind, = np.where(np.array(self.labels)==labels[i])
-            vmin = self.ranges[ind,0]
-            vmax = self.ranges[ind,1]
+        if params is None:
+            params = self.labels
+        nparams = len(params)
+        rndpars = np.zeros((n,nparams),float)
+        for i in range(nparams):
+            if params[i]!='alpham':
+                ind, = np.where(np.array(self.labels)==params[i])
+                vmin = self.ranges[ind,0]
+                vmax = self.ranges[ind,1]                
+            else:
+                ind = self._alphaindex.copy()
+                vmin = np.max(self.ranges[ind,0])
+                vmax = np.min(self.ranges[ind,1])
             vrange = vmax-vmin
             # make a small buffer
             vmin += vrange*0.01
             vrange *= 0.98
-            pars[:,i] = np.random.rand(n)*vrange+vmin
+            rndpars[:,i] = np.random.rand(n)*vrange+vmin
 
-        return pars
+        return rndpars
                 
     def __call__(self,pars,snr=None,spobs=None,vrel=None):
         # Get label array
@@ -444,7 +451,7 @@ class BOSSSyn():
             ind, = np.where(np.array(self.fitparams)=='logg')
             if len(ind)>0:
                 estimates[ind] = 1.5               
-            
+
         if verbose:
             print('Initial estimates: ',estimates)
             
@@ -473,6 +480,8 @@ class BOSSSyn():
                    'flux':spec.flux,'err':spec.err,'model':bestmodel,'chisq':chisq,
                    'loggrelation':loggrelation,'success':True}
             success = True
+        except KeyboardInterrupt:
+            return
         except:
             traceback.print_exc()
             success = False
@@ -545,7 +554,7 @@ def monte(params=None,nmonte=50,snr=50,initgrid=True,verbose=True):
     nparams = len(fitparams)
     dt = [('ind',int),('snr',float),('truepars',float,nparams),('pars',float,nparams),
           ('perror',float,nparams),('chisq',float)]
-    tab = np.zeros(nmonte,dtype=np.dtype(dt))
+    tab = Table(np.zeros(nmonte,dtype=np.dtype(dt)))
     for i in range(nmonte):
         print('---- Mock {:d} ----'.format(i+1))
         sp = bsyn(params,snr=snr)
@@ -576,7 +585,7 @@ def monte(params=None,nmonte=50,snr=50,initgrid=True,verbose=True):
         sdata = res['label'][i],res['value'][i],res['bias'][i],res['rms'][i]
         print('{:<7s}: value={:<10.2f} bias={:<10.3f} rms={:<10.3f}'.format(*sdata))
         
-    return res
+    return res,tab
     
 
 def test():
