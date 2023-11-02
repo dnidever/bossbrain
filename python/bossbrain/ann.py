@@ -34,7 +34,7 @@ class BOSSANNModel():
         self._ranges[1,0,1] = 4950.0        
         self._ranges[2,0,0] = 4950.0  # use 4900-6000 model from 4950
         self.ranges = np.zeros((self.nlabels,2),float)
-            self.ranges[0,0] = np.min(self._ranges[:,0,:])
+        self.ranges[0,0] = np.min(self._ranges[:,0,:])
         self.ranges[0,1] = np.max(self._ranges[:,0,:])        
         for i in np.arange(1,self.nlabels):            
             self.ranges[i,:] = [np.max(self._ranges[:,i,0]),np.min(self._ranges[:,i,1])]
@@ -47,15 +47,8 @@ class BOSSANNModel():
         self._alphaindex = np.array(alphaindex)
 
         # Input observed spectrum information
-        if spobs is not None:
-            self._spobs = spobs
-        # Default observed spectrum            
-        else:
-            spobs = doppler.read(utils.datadir()+'spec-3586-55181-0500.fits')
-            spobs.flux = np.zeros(spobs.npix)
-            spobs.err = np.ones(spobs.npix)            
-            self._spobs = spobs
-            
+        self._spobs = spobs
+        
         # ANN model wavelengths
         npix_model = 14001
         self._dispersion = np.arange(npix_model)*0.5+3500.0
