@@ -17,10 +17,10 @@ class BOSSSyn():
     
     def __init__(self,spobs=None,loggrelation=False,verbose=False):
         # Load the ANN models
-        em1 = Emulator.read(utils.datadir()+'ann_21pars_3500-4200.pkl')
-        em2 = Emulator.read(utils.datadir()+'ann_21pars_4000-5000.pkl')
-        em3 = Emulator.read(utils.datadir()+'ann_21pars_4900-6000.pkl')
-        self._models = [em1,em2,em3]
+        #em1 = Emulator.read(utils.datadir()+'ann_23pars_3500-4200.pkl')
+        em2 = Emulator.read(utils.datadir()+'ann_23pars_4000-5000.pkl')
+        em3 = Emulator.read(utils.datadir()+'ann_23pars_4900-6000.pkl')
+        self._models = [em2,em3]
         self.nmodels = len(self._models)
         self.labels = self._models[0].label_names
         self.nlabels = len(self.labels)
@@ -29,14 +29,15 @@ class BOSSSyn():
             for j in range(self.nlabels):
                 self._ranges[i,j,:] = [np.min(self._models[i].training_labels[:,j]),
                                        np.max(self._models[i].training_labels[:,j])]
-        self._ranges[0,0,1] = 4100.0  # use 3500-4200 model up to 4100
-        self._ranges[1,0,0] = 4100.0  # use 4000-5000 model from 4100 to 4950
-        self._ranges[1,0,1] = 4950.0        
-        self._ranges[2,0,0] = 4950.0  # use 4900-6000 model from 4950
+        #self._ranges[0,0,1] = 4100.0  # use 3500-4200 model up to 4100
+        #self._ranges[1,0,0] = 4100.0  # use 4000-5000 model from 4100 to 4950
+        #self._ranges[1,0,1] = 4950.0        
+        #self._ranges[2,0,0] = 4950.0  # use 4900-6000 model from 4950
         self.ranges = np.zeros((self.nlabels,2),float)
-        self.ranges[0,0] = np.min(self._ranges[:,0,:])
-        self.ranges[0,1] = np.max(self._ranges[:,0,:])        
-        for i in np.arange(1,self.nlabels):            
+        #self.ranges[0,0] = np.min(self._ranges[:,0,:])
+        #self.ranges[0,1] = np.max(self._ranges[:,0,:])        
+        #for i in np.arange(1,self.nlabels):
+        for i in range(self.nlabels):            
             self.ranges[i,:] = [np.max(self._ranges[:,i,0]),np.min(self._ranges[:,i,1])]
         
         # alpha element indexes
