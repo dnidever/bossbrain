@@ -6,6 +6,8 @@ import traceback
 from astropy.table import Table
 from scipy.optimize import curve_fit
 from theborg.emulator import Emulator
+from dlnpyutils import utils as dln
+import doppler
 from doppler.spec1d import Spec1D
 from . import utils
 
@@ -17,10 +19,10 @@ class BOSSANNModel():
     
     def __init__(self,spobs=None,loggrelation=False,verbose=False):
         # Load the ANN models
-        #em1 = Emulator.read(utils.datadir()+'ann_23pars_3500-4200.pkl')
+        em1 = Emulator.read(utils.datadir()+'ann_23pars_3500-4200.pkl')
         em2 = Emulator.read(utils.datadir()+'ann_23pars_4000-5000.pkl')
         em3 = Emulator.read(utils.datadir()+'ann_23pars_4900-6000.pkl')
-        self._models = [em2,em3]
+        self._models = [em1,em2,em3]
         self.nmodels = len(self._models)
         self.labels = self._models[0].label_names
         self.nlabels = len(self.labels)
@@ -72,7 +74,7 @@ class BOSSANNModel():
         """ Make the labels array from a dictionary."""
         # Dictionary input
         if type(pars) is dict:
-            labels = np.zeros(28)
+            labels = np.zeros(self.nlabels)
             # Must at least have Teff and logg
             for k in pars.keys():
                 if k=='alpham':   # mean alpha
@@ -206,7 +208,7 @@ class BOSSANNModel():
         return spobs
     
     def __call__(self,pars=None,spobs=None,snr=None,vrel=None,normalize=False,
-                 fiducial=False):
+                 fluxed=False,fiducial=False):
         """
         Returns BOSS model spectrum.
 
@@ -222,6 +224,8 @@ class BOSSANNModel():
            Doppler shift the spectrum by vrel (km/s).
         normalize : bool, optional
            Perform continuum normalization on the spectrum.
+        fluxed : bool, optional
+           Make the spectrum fluxed, i.e. add continuum.  Default is False.
         fiducial : bool, optional
            Use fiducial BOSS resolution and wavelength values.
 
@@ -261,6 +265,17 @@ class BOSSANNModel():
         # Get the ANN model spectrum
         flux = self._models[modelindex](labels)
         wave = self._dispersion
+
+        # Fluxed
+        if fluxed:
+            m = doppler.models.get_best_model(labels[0:3])
+            c = m._data[0].continuum
+            fc = c(labels[0:3])
+            wc = c.dispersion
+            # interpolate to the wavelength array
+            cont = dln.interp(wc,fc,wave,kind='quadratic')
+            cont = 10**cont
+            flux *= cont
         
         # Doppler shift
         if vrel is not None and vrel != 0.0:
@@ -270,10 +285,11 @@ class BOSSANNModel():
             flux[~np.isfinite(flux)] = 1.0
                 
         # Make the model Spec1D object
-        spsyn = Spec1D(flux,wave=wave)
+        spsyn = Spec1D(flux,err=np.zeros(len(flux)),wave=wave)
         # Say it is normalized
-        spsyn.normalized = True
-        spsyn._cont = np.ones(spsyn.flux.shape)        
+        if fluxed==False:
+            spsyn.normalized = True
+            spsyn._cont = np.ones(spsyn.flux.shape)        
         # Convolve to observed resolution and wavelength
         if fiducial and spobs is None:   # use fiducial values
             spobs = self.fiducialspec()

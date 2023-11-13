@@ -7,6 +7,7 @@ from astropy.table import Table
 from scipy.optimize import curve_fit
 from theborg.emulator import Emulator
 from doppler.spec1d import Spec1D
+from dlnpyutils import utils as dln
 import doppler
 import traceback
 from . import utils
@@ -15,12 +16,12 @@ class BOSSSyn():
 
     # model BOSS nirspec spectra
     
-    def __init__(self,spobs=None,loggrelation=False,verbose=False):
+    def __init__(self,spobs=None,loggrelation=False,fluxed=False,verbose=False):
         # Load the ANN models
-        #em1 = Emulator.read(utils.datadir()+'ann_23pars_3500-4200.pkl')
+        em1 = Emulator.read(utils.datadir()+'ann_23pars_3500-4200.pkl')
         em2 = Emulator.read(utils.datadir()+'ann_23pars_4000-5000.pkl')
         em3 = Emulator.read(utils.datadir()+'ann_23pars_4900-6000.pkl')
-        self._models = [em2,em3]
+        self._models = [em1,em2,em3]
         self.nmodels = len(self._models)
         self.labels = self._models[0].label_names
         self.nlabels = len(self.labels)
@@ -29,15 +30,14 @@ class BOSSSyn():
             for j in range(self.nlabels):
                 self._ranges[i,j,:] = [np.min(self._models[i].training_labels[:,j]),
                                        np.max(self._models[i].training_labels[:,j])]
-        #self._ranges[0,0,1] = 4100.0  # use 3500-4200 model up to 4100
-        #self._ranges[1,0,0] = 4100.0  # use 4000-5000 model from 4100 to 4950
-        #self._ranges[1,0,1] = 4950.0        
-        #self._ranges[2,0,0] = 4950.0  # use 4900-6000 model from 4950
+        self._ranges[0,0,1] = 4100.0  # use 3500-4200 model up to 4100
+        self._ranges[1,0,0] = 4100.0  # use 4000-5000 model from 4100 to 4950
+        self._ranges[1,0,1] = 4950.0        
+        self._ranges[2,0,0] = 4950.0  # use 4900-6000 model from 4950
         self.ranges = np.zeros((self.nlabels,2),float)
-        #self.ranges[0,0] = np.min(self._ranges[:,0,:])
-        #self.ranges[0,1] = np.max(self._ranges[:,0,:])        
-        #for i in np.arange(1,self.nlabels):
-        for i in range(self.nlabels):            
+        self.ranges[0,0] = np.min(self._ranges[:,0,:])
+        self.ranges[0,1] = np.max(self._ranges[:,0,:])        
+        for i in np.arange(1,self.nlabels):
             self.ranges[i,:] = [np.max(self._ranges[:,i,0]),np.min(self._ranges[:,i,1])]
         
         # alpha element indexes
@@ -72,6 +72,7 @@ class BOSSSyn():
         self.logg_model = logg_model
         
         self.loggrelation = loggrelation
+        self.fluxed = fluxed
         self.verbose = verbose
         self.fitparams = None
         self.njac = 0
@@ -198,9 +199,12 @@ class BOSSSyn():
 
         return rndpars
                 
-    def __call__(self,pars,snr=None,spobs=None,vrel=None):
+    def __call__(self,pars,snr=None,spobs=None,vrel=None,fluxed=None):
         # Get label array
         labels = self.mklabels(pars)
+        # Are we making a fluxed spectrum?
+        if fluxed is None:
+            fluxed = self.fluxed
 
         # Check that the labels are in range
         flag,badindex,rr = self.inrange(labels)
@@ -224,17 +228,49 @@ class BOSSSyn():
         # Get the synthetic spectrum
         flux = self._models[modelindex](labels)
 
+        # Fluxed
+        err = np.zeros(flux.shape,float)        
+        if fluxed:
+            m = doppler.models.get_best_model(labels[0:3])
+            c = m._data[0].continuum
+            fc = c(labels[0:3])
+            wc = c.dispersion
+            # interpolate to the wavelength array
+            cont = dln.interp(wc,fc,wave,kind='quadratic')
+            cont = 10**cont
+            flux *= cont
+            # Set flux at middle wavelength equal to (S/N)**2
+            # then scale the rest by sqrt(flux)
+            midw = np.mean([np.max(wave),np.min(wave)])
+            _,midind = dln.closest(wave,midw)            
+            if snr is not None:
+                flux *= (snr**2)/flux[midind]
+                snrall = np.sqrt(np.maximum(flux,0.0001))
+                err = flux/snrall     # SNR = flux/err -> err=flux/SNR
+                # now scale up so the middle wavelength has a flux of 10000
+                factor = 10000/flux[midind]
+                flux *= factor
+                err *= factor
+            else:
+                flux *= 10000/flux[midind]
+            
         # Doppler shift
         if vrel is not None and vrel != 0.0:
             redwave = wave*(1+vrel/cspeed)
             orig_flux = flux.copy()
             flux = dln.interp(redwave,flux,wave)
-        
+            err = dln.interp(redwave,err,wave)
+
+        # Fix any bad error values
+        bad = (err <=0) | ~np.isfinite(err)
+        err[bad] = np.nanmedian(err)
+            
         # Make the synthetic Spec1D object
-        spsyn = Spec1D(flux,wave=wave)
+        spsyn = Spec1D(flux,err=err,wave=wave)
         # Say it is normalized
-        spsyn.normalized = True
-        spsyn._cont = np.ones(spsyn.flux.shape)        
+        if fluxed==False:
+            spsyn.normalized = True
+            spsyn._cont = np.ones(spsyn.flux.shape)
         # Convolve to BOSS resolution and wavelength
         if spobs is None:
             spmonte = spsyn.prepare(self._spobs)
@@ -244,8 +280,11 @@ class BOSSSyn():
         spmonte.labels = labels
         # Add noise
         if snr is not None:
-            spmonte.flux += np.random.randn(*spmonte.err.shape)*1/snr
-            spmonte.err += 1/snr
+            if fluxed:
+                spmonte.flux += np.random.randn(*spmonte.err.shape)*spmonte.err
+            else:
+                spmonte.flux += np.random.randn(*spmonte.err.shape)*1/snr
+                spmonte.err += 1/snr
         # Deal with any NaNs
         bd, = np.where(~np.isfinite(spmonte.flux))
         if len(bd)>0:
@@ -350,32 +389,28 @@ class BOSSSyn():
         ----------
         spec : Spec1D 
            Spectrum to fit.
-        vrel : list
-           Input list of doppler shifts for the spectra.
-        cont : int, optional
-           Continuum parameter:
-            1   polynomial fitting  (ncont order, 0-constant, 1-linear)
-            2   segmented normaleization  (ncont segments)
-            3   running mean  (ncont pixels)
-        ncont : int, optional
-           Number for continuum normalization.  If cont=1, then ncont
-            gives the polynomial order.  If cont=2, then ncont is the
-            number of segements.  If cont=3, then ncont is the number
-            of pixels for the running mean.
+        fitparams : list, optional
+           List of parameters to fit.  Default is all of them.
         loggrelation : bool, optional
            Use the logg-relation as a function of Teff/feh/alpha.
+        normalize : bool, optional
+           Normalize the spectrum.  Default is False.
+        initgrid : bool, optional
+           Use an initial grid of random parameters.  Default is True.
+        outlier : bool, optional
+           Do a second iteration after outlier rejection.  Default is False.
+        verbose: bool, optional
+           Verbose output to the screen.  Default is False.
 
         Returns
         -------
         tab : table
-           Output table of values.
-        info : list
-           List of dictionaries, one per spectrum, that includes spectra and arrays.
+           Output table of results.
 
         Example
         -------
 
-        tab,info = fit(spec)
+        tab = bsyn.fit(spec)
 
         """
 
@@ -540,11 +575,11 @@ class BOSSSyn():
 
             
     
-def monte(params=None,nmonte=50,snr=50,initgrid=True,verbose=True):
+def monte(params=None,nmonte=50,snr=50,initgrid=True,fluxed=False,normalize=False,verbose=True):
     """ Simple Monte Carlo test to recover elemental abundances."""
 
     # Initialize BOSS spectral simulation object
-    bsyn = BOSSSyn()
+    bsyn = BOSSSyn(fluxed=fluxed)
 
     if params is None:
         params = {'teff':4000.0,'logg':2.0,'mh':0.0,'cm':0.1}
@@ -560,7 +595,8 @@ def monte(params=None,nmonte=50,snr=50,initgrid=True,verbose=True):
         print('---- Mock {:d} ----'.format(i+1))
         sp = bsyn(params,snr=snr)
         try:
-            out = bsyn.fit(sp,fitparams=fitparams,initgrid=initgrid,verbose=verbose)
+            out = bsyn.fit(sp,fitparams=fitparams,initgrid=initgrid,
+                           normalize=normalize,verbose=verbose)
             tab['ind'][i] = i+1
             tab['snr'][i] = out['snr']
             tab['truepars'][i] = truepars
