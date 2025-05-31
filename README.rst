@@ -1,3 +1,4 @@
+|logo|
 
 BOSSBrain
 ==================
@@ -31,3 +32,7 @@ License
 
 .. image:: http://img.shields.io/badge/license-MIT-blue.svg?style=flat
         :target: https://github.com/dnidever/bossbrain/blob/main/LICENSE
+
+.. |logo| image:: https://bossbrain.readthedocs.io/en/latest/_static/bossbrain_logo.png
+   :target: https://github.com/dnidever/bossbrain
+   :width: 400
