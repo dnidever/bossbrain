@@ -19,9 +19,9 @@ class BOSSANNModel():
     
     def __init__(self,spobs=None,loggrelation=False,verbose=False):
         # Load the ANN models
-        em1 = Emulator.read(utils.datadir()+'ann_23pars_3500-4200.pkl')
-        em2 = Emulator.read(utils.datadir()+'ann_23pars_4000-5000.pkl')
-        em3 = Emulator.read(utils.datadir()+'ann_23pars_4900-6000.pkl')
+        em1 = Emulator.read(utils.datadir()+'ann_22pars_3500-4200.pkl')
+        em2 = Emulator.read(utils.datadir()+'ann_22pars_4000-5000.pkl')
+        em3 = Emulator.read(utils.datadir()+'ann_22pars_4900-6000.pkl')
         self._models = [em1,em2,em3]
         self.nmodels = len(self._models)
         self.labels = self._models[0].label_names

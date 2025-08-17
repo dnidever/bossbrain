@@ -7,10 +7,12 @@ from astropy.table import Table
 from scipy.optimize import curve_fit
 from theborg.emulator import Emulator
 from doppler.spec1d import Spec1D
-from dlnpyutils import utils as dln
+from dlnpyutils import utils as dln, astro
 import doppler
 import traceback
 from . import utils
+
+cspeed = 2.99792458e5  # speed of light in km/s
 
 class BOSSSyn():
 
@@ -18,9 +20,9 @@ class BOSSSyn():
     
     def __init__(self,spobs=None,loggrelation=False,fluxed=False,verbose=False):
         # Load the ANN models
-        em1 = Emulator.read(utils.datadir()+'ann_23pars_3500-4200.pkl')
-        em2 = Emulator.read(utils.datadir()+'ann_23pars_4000-5000.pkl')
-        em3 = Emulator.read(utils.datadir()+'ann_23pars_4900-6000.pkl')
+        em1 = Emulator.read(utils.datadir()+'ann_22pars_3500-4200.pkl')
+        em2 = Emulator.read(utils.datadir()+'ann_22pars_4000-5000.pkl')
+        em3 = Emulator.read(utils.datadir()+'ann_22pars_4900-6000.pkl')
         self._models = [em1,em2,em3]
         self.nmodels = len(self._models)
         self.labels = self._models[0].label_names
@@ -59,13 +61,24 @@ class BOSSSyn():
 
         # Synthetic wavelengths
         npix_syn = 14001
-        self._wsyn = np.arange(npix_syn)*0.5+3500.0
-
+        wsyn_air = np.arange(npix_syn)*0.5+3500.0   # air wavelengths
+        self._wsyn = astro.airtovac(wsyn_air)       # to vacuum
+        
         # Get logg label
         loggind, = np.where(np.char.array(self.labels).lower()=='logg')
         if len(loggind)==0:                
             raise ValueError('No logg label')
         self.loggind = loggind[0]
+        # Get teff label
+        teffind, = np.where(np.char.array(self.labels).lower()=='teff')
+        if len(teffind)==0:
+            raise ValueError('No teff label')
+        self.teffind = teffind[0]
+        # Get feh label
+        mhind, = np.where(np.char.array(self.labels).lower()=='mh')
+        if len(mhind)==0:
+            raise ValueError('No mh label')
+        self.mhind = mhind[0]                
         
         # Load the ANN model
         logg_model = Emulator.load(utils.datadir()+'apogeedr17_rgb_logg_ann.npz')
@@ -76,13 +89,16 @@ class BOSSSyn():
         self.verbose = verbose
         self.fitparams = None
         self.njac = 0
+        self._wobs = None
+        self.fixparams = {}
+        self.normalize = False
         
     def mklabels(self,pars):
         """ Make the labels array from a dictionary."""
+        
         # Dictionary input
         if type(pars) is dict:
             labels = np.zeros(self.nlabels)
-            # Must at least have Teff and logg
             for k in pars.keys():
                 if k=='alpham':   # mean alpha
                     ind = self._alphaindex.copy()
@@ -91,8 +107,6 @@ class BOSSSyn():
                 if len(ind)==0:
                     raise ValueError(k+' not found in labels: '+','.join(self.labels))
                 labels[ind] = pars[k]
-            if labels[0]<=0 or labels[1]<=0:
-                raise ValueError('pars must at least have teff and logg')
         # List or array input
         else:
             if self.fitparams is not None and len(pars) != len(self.labels):
@@ -107,6 +121,28 @@ class BOSSSyn():
             #if len(labels)<len(self.labels):
             #    raise ValueError('pars must have '+str(len(self.labels))+' elements')
 
+
+        # Make sure labels is an array
+        labels = np.array(labels)
+
+        # Add any fixed values
+        for k in self.fixparams.keys():
+            if k=='alpham':
+                ind = self._alphaindex.copy()
+                labels[ind] = self.fixparams[k]
+            else:
+                ind, = np.where(np.array(self.labels)==k)
+                labels[ind] = self.fixparams[k]
+        
+        # Get logg
+        if self.loggrelation:
+            logg = self.getlogg(labels)
+            labels[self.loggind] = logg
+            
+        # Must at least have Teff and logg                
+        if labels[0]<=0 or labels[1]<=0:
+            raise ValueError('pars must at least have teff and logg')            
+            
         return labels
 
     def get_best_model(self,labels):
@@ -126,12 +162,12 @@ class BOSSSyn():
         for i in range(len(params)):
             if params[i].lower()=='alpham':   # mean alpha
                 ind = self._alphaindex.copy()
-                bounds[0][i] = np.max(self.ranges[ind,0])
-                bounds[1][i] = np.min(self.ranges[ind,1])
+                bounds[0][i] = np.max(self.ranges[ind,0])+0.05
+                bounds[1][i] = np.min(self.ranges[ind,1])-0.05
             else:
                 ind, = np.where(np.array(self.labels)==params[i].lower())
-                bounds[0][i] = self.ranges[ind,0]
-                bounds[1][i] = self.ranges[ind,1]
+                bounds[0][i] = self.ranges[ind,0]+0.05
+                bounds[1][i] = self.ranges[ind,1]-0.05
         return bounds
                 
     def inrange(self,pars):
@@ -148,29 +184,26 @@ class BOSSSyn():
                 return False,i,rr
         return True,None,None
 
-    def getlogg(self,pars):
-        """ Get logg from the logg relation and fill it into the parameter array where it belongs."""
-        # The only parameters should be input, with the logg one missing/excluded
-        # Insert a dummy value for logg
-        newpars = np.insert(pars,self.loggind,0.0)
-        teff = newpars[self.teffind]
-        feh = newpars[self.fehind]
-        if self.alphaind is not None:
-            alpha = newpars[self.alphaind]
-        else:
-            alpha = 0.0
-        logg = self.logg_model([teff,feh,alpha],border='extrapolate')
-        newpars[self.loggind] = logg
-        return newpars
+    def getlogg(self,labels):
+        """ Get logg from the logg relation."""
+        alpha = np.mean(np.array(labels)[self._alphaindex])
+        teff = labels[self.teffind]
+        mh = labels[self.mhind]
+        logg = self.logg_model([teff,mh,alpha],border='extrapolate')
+        logg = logg[0]
+        return logg
 
-    def printpars(self,pars,perror):
+    def printpars(self,pars,perror,names=None):
         """ Print out parameters and errors."""
         
         for i in range(len(pars)):
-            if self.fitparams is not None and len(pars) != self.nlabels:
-                name = self.fitparams[i]
+            if names is None:
+                if self.fitparams is not None and len(pars) != self.nlabels:
+                    name = self.fitparams[i]
+                else:
+                    name = self.labels[i]
             else:
-                name = self.labels[i]
+                name = names[i]
             if i==0:
                 print('{:6s}: {:10.1f} +/- {:5.2g}'.format(name,pars[i],perror[i]))
             else:
@@ -199,13 +232,18 @@ class BOSSSyn():
 
         return rndpars
                 
-    def __call__(self,pars,snr=None,spobs=None,vrel=None,fluxed=None):
+    def __call__(self,pars,snr=None,spobs=None,vrel=None,fluxed=None,wrange=None):
         # Get label array
         labels = self.mklabels(pars)
         # Are we making a fluxed spectrum?
         if fluxed is None:
             fluxed = self.fluxed
 
+        # Use the stored observed vrel
+        #if vrel is None and self._spobs is not None and hasattr(self._spobs,'vrel') and self._spobs.vrel is not None:
+        if hasattr(self,'vrel') and self.vrel is not None:
+            vrel = self.vrel
+            
         # Check that the labels are in range
         flag,badindex,rr = self.inrange(labels)
         if flag==False:
@@ -213,10 +251,20 @@ class BOSSSyn():
             error = 'parameters out of range: '
             error += '{:s}={:.4f}'.format(self.labels[badindex],labels[badindex])
             error += ' '+srr
-            if spobs is None:
-                return np.zeros(self._spobs.size)+1e30
+            if spobs is not None:
+                owave = spobs.wave.copy()
             else:
-                return np.zeros(spobs.size)+1e30
+                owave = self._spobs.wave.copy()
+            # Trim wavelengths
+            wobs = self._wobs
+            if wobs is not None:
+                gdw, = np.where((owave >= wobs[0]) & (owave <= wobs[1]))
+                if len(gdw)<len(owave):
+                    owave = owave[gdw]
+            npix = len(owave)
+            spmonte = Spec1D(np.zeros(npix,float)+1e30,err=np.ones(npix,float)*0.0001,
+                             wave=owave)
+            return spmonte
             #raise ValueError(error)
             
         # Get the right model to use based on input Teff/logg/feh
@@ -260,7 +308,7 @@ class BOSSSyn():
             orig_flux = flux.copy()
             flux = dln.interp(redwave,flux,wave)
             err = dln.interp(redwave,err,wave)
-
+            
         # Fix any bad error values
         bad = (err <=0) | ~np.isfinite(err)
         err[bad] = np.nanmedian(err)
@@ -291,6 +339,28 @@ class BOSSSyn():
             spmonte.flux[bd] = 1.0
             spmonte.err[bd] = 1e30
             spmonte.mask[bd] = True
+
+        # Trim wavelengths
+        wobs = self._wobs
+        if wobs is not None:
+            gdw, = np.where((spmonte.wave >= wobs[0]) & (spmonte.wave <= wobs[1]))
+            if len(gdw)<spmonte.npix:
+                spmonte.flux = spmonte.flux[gdw]
+                spmonte.err = spmonte.err[gdw]
+                spmonte.wave = spmonte.wave[gdw]
+                spmonte.mask = spmonte.mask[gdw]
+                spmonte.numpix = np.array([len(gdw)])
+                if spmonte._cont is not None:
+                    spmonte._cont = spmonte._cont[gdw]
+                spmonte.lsf.wave = spmonte.lsf.wave[gdw]
+                if spmonte.lsf._sigma is not None:
+                    spmonte.lsf._sigma = spmonte.lsf._sigma[gdw]
+
+        # Run the continuum normalization procedure on the spectrum
+        if self.normalize:
+            spmonte.normalize()
+
+        #import pdb; pdb.set_trace()
             
         return spmonte
     
@@ -354,24 +424,31 @@ class BOSSSyn():
         f0 = self.model(wave,*pars,**kwargs)        
         steps = np.zeros(len(self.fitparams))
         for i in range(len(self.fitparams)):
-            ind, = np.where(np.array(self.labels)==self.fitparams[i])
-            if self.loggrelation and i==self.loggind:
-                continue
-            targs = np.array(copy.deepcopy(fullargs))
-            if ind==0:
-                step = 10.0                
-            else:
+            targs = np.array(copy.deepcopy(fullargs))            
+            if self.fitparams[i]=='alpham':
                 step = 0.01
-            steps[i] = step
-            # Check boundaries, if above upper boundary
-            #   go the opposite way
-            if targs[ind]>self.ranges[ind,1]:
-                step *= -1
-            targs[ind] += step
-            # Remove dummy logg if using logg relation
-            if self.loggrelation:
-                targs = np.delete(targs,self.loggind)
-            #print(i,step,targs)
+                ind = self._alphaindex
+                alpha = np.mean(targs[ind])
+                minalpha = np.min(targs[ind])
+                maxalpha = np.max(targs[ind])
+                # Check boundaries, if above upper boundary
+                #   go the opposite way
+                if maxalpha > np.min(self.ranges[ind,1]):
+                    step *= -1
+                steps[i] = step                    
+                targs[ind] += step
+            else:
+                ind, = np.where(np.array(self.labels)==self.fitparams[i])
+                if self.labels[ind[0]].lower()=='teff':
+                    step = 10.0
+                else:
+                    step = 0.01
+                # Check boundaries, if above upper boundary
+                #   go the opposite way
+                if targs[ind]>self.ranges[ind,1]:
+                    step *= -1
+                steps[i] = step                    
+                targs[ind] += step
             f1 = self.model(wave,*targs,**kwargs)
             fjac[:,i] = (f1-f0)/steps[i]
             
@@ -380,8 +457,8 @@ class BOSSSyn():
         return fjac
         
     
-    def fit(self,spec,fitparams=None,loggrelation=False,normalize=False,
-            initgrid=True,outlier=False,verbose=False):
+    def fit(self,spec,fitparams=None,fixparams={},loggrelation=False,normalize=False,
+            initgrid=True,outlier=False,verbose=False,estimates=None,vrel=0.0):
         """
         Fit an observed spectrum with the ANN models and curve_fit.
 
@@ -391,6 +468,8 @@ class BOSSSyn():
            Spectrum to fit.
         fitparams : list, optional
            List of parameters to fit.  Default is all of them.
+        fixparams : dict, optional
+           Dictionary of parameters to hold fixed.
         loggrelation : bool, optional
            Use the logg-relation as a function of Teff/feh/alpha.
         normalize : bool, optional
@@ -414,7 +493,7 @@ class BOSSSyn():
 
         """
 
-        vrel = 0.0
+        self.vrel = vrel
         spec.vrel = vrel
         if verbose:
             print('Vrel: {:.2f} km/s'.format(vrel))
@@ -428,7 +507,13 @@ class BOSSSyn():
             fitparams = self.labels
         self.fitparams = np.array(fitparams)
         nfitparams = len(fitparams)
+        self.fixparams = fixparams
+        
+        wrange = [np.min(spec.wave),np.max(spec.wave)]
+        self._wobs = wrange
 
+        self.normalize = normalize
+        
         # Make bounds
         #bounds = [np.zeros(nfitparams),np.zeros(nfitparams)]
         #for i in range(nfitparams):
@@ -480,16 +565,21 @@ class BOSSSyn():
             bestind = np.argmin(chisqarr)
             estimates = gridpars[bestind,:]
         else:
-            estimates = np.zeros(len(self.fitparams))
-            ind, = np.where(np.array(self.fitparams)=='teff')
-            if len(ind)>0:
-                estimates[ind] = 5000.0  # 4200
-            ind, = np.where(np.array(self.fitparams)=='logg')
-            if len(ind)>0:
-                estimates[ind] = 1.5               
+            # Get initial estimates if not input
+            if estimates is None:
+                estimates = np.zeros(len(self.fitparams))
+                ind, = np.where(np.array(self.fitparams)=='teff')
+                if len(ind)>0:
+                    estimates[ind] = 5000.0  # 4200
+                ind, = np.where(np.array(self.fitparams)=='logg')
+                if len(ind)>0:
+                    estimates[ind] = 1.5               
 
         if verbose:
             print('Initial estimates: ',estimates)
+
+
+        import pdb; pdb.set_trace()
             
         try:
             pars,pcov = curve_fit(self.model,spec.wave,spec.flux,p0=estimates,
@@ -499,16 +589,23 @@ class BOSSSyn():
             chisq = np.sum((spec.flux-bestmodel)**2/spec.err**2)/spec.size
             
             # Get full parameters
-            if loggrelation:
-                fullpars = self.getlogg(pars)
-                fullperror = np.insert(perror,self.loggind,0.0)
-            else:
-                fullpars = pars
-                fullperror = perror
+            fullpars = list(pars)
+            fullperror = list(perror)
+            names = list(self.fitparams)
+            if loggrelation or self.loggrelation:
+                logg = self.getlogg(self.mklabels(pars))
+                fullpars.append(logg)
+                fullperror.append(0.0)
+                names.append('logg')
+            # Add any fixed parameters
+            for k in self.fixparams.keys():
+                fullpars.append(self.fixparams[k])
+                fullperror.append(0.0)
+                names.append(k)
 
             if verbose:
                 print('Best parameters:')
-                self.printpars(fullpars,fullperror)
+                self.printpars(fullpars,fullperror,names)
                 print('Chisq: {:.3f}'.format(chisq))
 
             # Construct the output dictionary
