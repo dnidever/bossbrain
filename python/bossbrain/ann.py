@@ -129,6 +129,7 @@ class BOSSANNModel():
                 ind, = np.where(np.array(self.labels)==params[i].lower())
                 bounds[0][i] = self.ranges[ind,0]
                 bounds[1][i] = self.ranges[ind,1]
+        return bounds
     
     def inrange(self,pars):
         """ Check that the parameters are in range."""
@@ -278,6 +279,8 @@ class BOSSANNModel():
             flux *= cont
         
         # Doppler shift
+        if vrel is None:
+            vrel = self._spobs.vrel
         if vrel is not None and vrel != 0.0:
             redwave = wave*(1+vrel/cspeed)  # redshift the wavelengths
             orig_flux = flux.copy()
@@ -285,7 +288,8 @@ class BOSSANNModel():
             flux[~np.isfinite(flux)] = 1.0
                 
         # Make the model Spec1D object
-        spsyn = Spec1D(flux,err=np.zeros(len(flux)),wave=wave)
+        #  synspec wavelengths are in air units
+        spsyn = Spec1D(flux,err=np.zeros(len(flux)),wave=wave,wavevac=False)
         # Say it is normalized
         if fluxed==False:
             spsyn.normalized = True
@@ -407,7 +411,7 @@ class BOSSANNModel():
         return fjac
         
     
-    def fit(self,spec,fitparams=None,loggrelation=False,normalize=False,
+    def fit(self,spec,vrel=0.0,fitparams=None,loggrelation=False,normalize=False,
             initgrid=True,outlier=False,verbose=False):
         """
         Fit an observed spectrum with the ANN models and curve_fit.
@@ -445,8 +449,8 @@ class BOSSANNModel():
 
         """
 
-        vrel = 0.0
-        spec.vrel = vrel
+        if hasattr(spec,'vrel') == False:
+            spec.vrel = vrel
         if verbose:
             print('Vrel: {:.2f} km/s'.format(vrel))
             print('S/N: {:.2f}'.format(spec.snr))
@@ -462,6 +466,9 @@ class BOSSANNModel():
 
         # Make bounds
         bounds = self.mkbounds(fitparams)
+
+        self._spobs = spec
+        self.vrel = spec.vrel
         
         # Run set of ~100 points to get first estimate
         ngrid = 100
