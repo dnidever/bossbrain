@@ -17,7 +17,7 @@ class BOSSANNModel():
 
     # Model BOSS spectra using ANN model
     
-    def __init__(self,spobs=None,loggrelation=False,verbose=False):
+    def __init__(self,spobs=None,loggrelation=False,fluxed=False,verbose=False):
         # Load the ANN models
         em1 = Emulator.read(utils.datadir()+'ann_22pars_3500-4200.pkl')
         em2 = Emulator.read(utils.datadir()+'ann_22pars_4000-5000.pkl')
@@ -66,6 +66,7 @@ class BOSSANNModel():
         self.logg_model = logg_model
         
         self.loggrelation = loggrelation
+        self.fluxed = fluxed
         self.verbose = verbose
         self.fitparams = None
         self.njac = 0
@@ -88,12 +89,18 @@ class BOSSANNModel():
                 raise ValueError('pars must at least have teff and logg')
         # List or array input
         else:
+            # Make full parameter array
             if self.fitparams is not None and len(pars) != len(self.labels):
-                if len(pars) != len(self.fitparams):
+                fitlabels = [p.lower() for p in self.fitparams if p.lower() != 'rv']
+                fitlabels = np.array(fitlabels)
+                if len(pars) != len(fitlabels):
                     raise ValueError('pars size not consistent with fitparams')
                 labels = np.zeros(self.nlabels)
-                for i in range(len(pars)):
-                    ind, = np.where(np.array(self.labels)==self.fitparams[i])
+                for i in range(len(fitlabels)):
+                    if fitlabels[i]=='alpham':   # mean alpha
+                        ind = self._alphaindex.copy()
+                    else:
+                        ind, = np.where(np.array(self.labels)==fitlabels[i])
                     labels[ind] = pars[i]
             else:
                 labels = pars
@@ -249,8 +256,19 @@ class BOSSANNModel():
         # If no pars input, use mean values
         if pars is None:
             pars = self.meanlabels()
+            
         # Get label array
-        labels = self.mklabels(pars)
+        #  vrel is not in "pars", input separately
+        try:
+            labels = self.mklabels(pars)
+        except:
+            traceback.print_exc()
+            print('problems')
+            import pdb; pdb.set_trace()
+            
+        # Are we making a fluxed spectrum?
+        if fluxed is None:
+            fluxed = self.fluxed
         
         # Check that the labels are in range
         flag,badindex,rr = self.inrange(labels)
@@ -282,7 +300,7 @@ class BOSSANNModel():
             cont = dln.interp(wc,fc,wave,kind='quadratic')
             cont = 10**cont
             flux *= cont
-        
+            
         # Doppler shift
         if vrel is None:
             vrel = self._spobs.vrel
@@ -334,12 +352,16 @@ class BOSSANNModel():
         """ Model function for curve_fit."""
         if self.verbose:
             print('model: ',pars)
+            
         # remove RV
         if 'rv' in self.fitparams:
             labelparams = [item[1] for item in zip(self.fitparams,pars) if item[0] != 'rv']
             ind, = np.where(self.fitparams=='rv')
             vrel = pars[ind[0]]
             kwargs['vrel'] = vrel
+        else:
+            labelparams = pars
+            
         out = self(labelparams,**kwargs)
         # Only return the flux
         if isinstance(out,Spec1D):
@@ -375,11 +397,18 @@ class BOSSANNModel():
 
         """
 
-        fullargs = self.mklabels(args)
         # add RV, if we are fitting it
         if 'rv' in self.fitparams:
-            ind, = np.where(self.fitparams=='rv')
-            fullargs = np.hstack((fullargs,args[ind[0]]))
+            # remove vrel at the end of args array
+            rvind, = np.where(self.fitparams=='rv')
+            labelargs = np.array(args).copy()
+            labelargs = np.delete(labelargs,rvind)
+            fullargs = self.mklabels(labelargs)
+            # now add vrel value to it at the end
+            fullargs = np.hstack((fullargs,args[rvind[0]]))
+
+        else:
+            fullargs = self.mklabels(args)
             
         # logg relation
         #  add a dummy logg value in
@@ -407,10 +436,10 @@ class BOSSANNModel():
             if ind==0:
                 step = 10.0                
             else:
-                step = 0.01
+                step = 0.05
             if self.fitparams[i]=='rv':
                 isrv = True
-                step = 0.1
+                step = 1.0
             else:
                 isrv = False
             steps[i] = step
@@ -514,6 +543,8 @@ class BOSSANNModel():
         # Save the spectrum to fit
         self._spobs = spec
 
+        # ADD AN OPTION TO AUTOMATICALLY SCALE THE LSF SIGMA ARRAY
+        
         
         # Run set of ~100 points to get first estimate
         ngrid = 100
@@ -579,12 +610,15 @@ class BOSSANNModel():
                 estimates[ind] = 4200.0
             ind, = np.where(np.array(self.fitparams)=='logg')
             if len(ind)>0:
-                estimates[ind] = 1.5               
+                estimates[ind] = 1.5
+            ind, = np.where(np.array(self.fitparams)=='rv')
+            if len(ind)>0:
+                estimates[ind] = vrel
             
         if verbose:
             print('Initial estimates: ',estimates)
             
-        try:            
+        try:
             pars,pcov = curve_fit(self.model,spec.wave,spec.flux,p0=estimates,
                                   sigma=spec.err,bounds=bounds,jac=self.jac)
             perror = np.sqrt(np.diag(pcov))
