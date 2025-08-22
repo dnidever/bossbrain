@@ -15,7 +15,7 @@ cspeed = 2.99792458e5  # speed of light in km/s
 
 class BOSSANNModel():
 
-    # Model BOSS nirspec spectra using ANN model
+    # Model BOSS spectra using ANN model
     
     def __init__(self,spobs=None,loggrelation=False,verbose=False):
         # Load the ANN models
@@ -125,6 +125,9 @@ class BOSSANNModel():
                 ind = self._alphaindex.copy()
                 bounds[0][i] = np.max(self.ranges[ind,0])
                 bounds[1][i] = np.min(self.ranges[ind,1])
+            elif params[i].lower()=='rv':
+                bounds[0][i] = -1000
+                bounds[1][i] = 1000
             else:
                 ind, = np.where(np.array(self.labels)==params[i].lower())
                 bounds[0][i] = self.ranges[ind,0]
@@ -176,18 +179,20 @@ class BOSSANNModel():
     def randompars(self,params=None,n=100):
         """ Create random parameters for initial guesses."""
         if params is None:
-            params = self.labels
-        nparams = len(params)
-        rndpars = np.zeros((n,nparams),float)
-        for i in range(nparams):
-            if params[i]!='alpham':
-                ind, = np.where(np.array(self.labels)==params[i])
-                vmin = self.ranges[ind,0]
-                vmax = self.ranges[ind,1]                
-            else:
+            params = self.fitparams
+        # Do NOT include RV, that is handled separately
+        labelparams = [p.lower() for p in params if p.lower() != 'rv']
+        nlabelparams = len(labelparams)
+        rndpars = np.zeros((n,nlabelparams),float)
+        for i in range(nlabelparams):
+            if labelparams[i].lower() == 'alpham':
                 ind = self._alphaindex.copy()
                 vmin = np.max(self.ranges[ind,0])
                 vmax = np.min(self.ranges[ind,1])
+            else:
+                ind, = np.where(np.array(self.labels)==params[i])
+                vmin = self.ranges[ind,0]
+                vmax = self.ranges[ind,1]
             vrange = vmax-vmin
             # make a small buffer
             vmin += vrange*0.01
@@ -246,7 +251,7 @@ class BOSSANNModel():
             pars = self.meanlabels()
         # Get label array
         labels = self.mklabels(pars)
-
+        
         # Check that the labels are in range
         flag,badindex,rr = self.inrange(labels)
         if flag==False:
@@ -329,7 +334,13 @@ class BOSSANNModel():
         """ Model function for curve_fit."""
         if self.verbose:
             print('model: ',pars)
-        out = self(pars,**kwargs)
+        # remove RV
+        if 'rv' in self.fitparams:
+            labelparams = [item[1] for item in zip(self.fitparams,pars) if item[0] != 'rv']
+            ind, = np.where(self.fitparams=='rv')
+            vrel = pars[ind[0]]
+            kwargs['vrel'] = vrel
+        out = self(labelparams,**kwargs)
         # Only return the flux
         if isinstance(out,Spec1D):
             return out.flux
@@ -365,7 +376,11 @@ class BOSSANNModel():
         """
 
         fullargs = self.mklabels(args)
-        
+        # add RV, if we are fitting it
+        if 'rv' in self.fitparams:
+            ind, = np.where(self.fitparams=='rv')
+            fullargs = np.hstack((fullargs,args[ind[0]]))
+            
         # logg relation
         #  add a dummy logg value in
         #if self.loggrelation:
@@ -375,7 +390,7 @@ class BOSSANNModel():
 
         if self.verbose:
             print('jac: ',args)
-
+            
         # Initialize jacobian matrix
         npix = len(wave)
         fjac = np.zeros((npix,len(self.fitparams)),np.float64)
@@ -393,12 +408,21 @@ class BOSSANNModel():
                 step = 10.0                
             else:
                 step = 0.01
+            if self.fitparams[i]=='rv':
+                isrv = True
+                step = 0.1
+            else:
+                isrv = False
             steps[i] = step
             # Check boundaries, if above upper boundary
             #   go the opposite way
-            if targs[ind]>self.ranges[ind,1]:
-                step *= -1
-            targs[ind] += step
+            if isrv:
+                if targs[i]+step > 1000:
+                    step *= -1
+            else:
+                if targs[i]+step>self.ranges[ind,1]:
+                    step *= -1
+            targs[i] += step
             # Remove dummy logg if using logg relation
             if self.loggrelation:
                 targs = np.delete(targs,self.loggind)
@@ -411,8 +435,8 @@ class BOSSANNModel():
         return fjac
         
     
-    def fit(self,spec,vrel=0.0,fitparams=None,loggrelation=False,normalize=False,
-            initgrid=True,outlier=False,verbose=False):
+    def fit(self,spec,vrel=None,fitparams=None,loggrelation=False,normalize=False,
+            initgrid=True,estimates=None,outlier=False,skipdoppler=False,verbose=False):
         """
         Fit an observed spectrum with the ANN models and curve_fit.
 
@@ -449,10 +473,11 @@ class BOSSANNModel():
 
         """
 
-        if hasattr(spec,'vrel') == False:
+        if hasattr(spec,'vrel') == False and vrel is not None:
             spec.vrel = vrel
         if verbose:
-            print('Vrel: {:.2f} km/s'.format(vrel))
+            if vrel is not None:
+                print('Vrel: {:.2f} km/s'.format(vrel))
             print('S/N: {:.2f}'.format(spec.snr))
         # Now normalize
         if normalize:
@@ -460,15 +485,35 @@ class BOSSANNModel():
                 spec.normalize()
 
         if fitparams is None:
-            fitparams = self.labels
+            fitparams = self.labels+['rv']
+        fitparams = [p.lower() for p in fitparams]
         self.fitparams = np.array(fitparams)
         nfitparams = len(fitparams)
 
         # Make bounds
         bounds = self.mkbounds(fitparams)
 
+        # Use spec.vrel
+        if vrel is None and hasattr(spec,'vrel') and getattr(spec,'vrel') is not None:
+            vrel = spec.vrel
+        
+        # Run doppler if no velocity input
+        if vrel is None and skipdoppler==False:
+            dopout, dopfmodel, dopspecm = doppler.fit(spec,verbose=verbose)
+            vrel = dopout['vrel'][0]
+            if estimates is None:
+                estimates = {'teff':dopout['teff'][0],'logg':dopout['logg'][0],
+                             'mh':dopout['feh'][0]}
+        # Using input vrel or default of 0.0
+        else:
+            if vrel is None:
+                vrel = 0.0
+        spec.vrel = vrel
+            
+            
+        # Save the spectrum to fit
         self._spobs = spec
-        self.vrel = spec.vrel
+
         
         # Run set of ~100 points to get first estimate
         ngrid = 100
@@ -496,22 +541,37 @@ class BOSSANNModel():
             #    agrid = np.arange(nsample)*astep+self._ranges[0,3,0]+astep*0.5
             #    tgrid2d,ggrid2d,mgrid2d,agrid2d = np.meshgrid(tgrid,ggrid,mgrid,agrid)
             #    gridpars = np.vstack((tgrid2d.flatten(),ggrid2d.flatten(),mgrid2d.flatten(),agrid2d.flatten())).T
+
+            # These are only for the LABELS, not RV
             gridpars = self.randompars(self.fitparams,ngrid)
+            fitlabels = [p.lower() for p in self.fitparams if p.lower() != 'rv']
+            fitlabels = np.array(fitlabels)
             if verbose:
                print('Testing an initial set of '+str(gridpars.shape[0])+' random parameters')
-            
+
+            # Use input estimates
+            if estimates is not None:
+                for i in range(len(estimates.keys())):
+                    key = list(estimates.keys())[i]
+                    ind, = np.where(fitlabels == key.lower())
+                    if len(ind)>0:
+                        gridpars[:,ind[0]] = estimates[key]
+                        
             # Make the models
             for i in range(gridpars.shape[0]):
                 tpars1 = {}
-                for j in range(len(self.fitparams)):
-                    tpars1[self.fitparams[j]] = gridpars[i,j]
-                sp1 = self(tpars1)
+                for j in range(len(fitlabels)):
+                    tpars1[fitlabels[j]] = gridpars[i,j]
+                sp1 = self(tpars1,vrel=vrel)
                 if i==0:
                     synflux = np.zeros((gridpars.shape[0],sp1.size),float)
                 synflux[i,:] = sp1.flux
             chisqarr = np.sum((synflux-spec.flux)**2/spec.err**2,axis=1)/spec.size
             bestind = np.argmin(chisqarr)
             estimates = gridpars[bestind,:]
+            # add rv to the end, if necessary
+            if 'rv' in self.fitparams:
+                estimates = np.hstack((estimates,vrel))
         else:
             estimates = np.zeros(len(self.fitparams))
             ind, = np.where(np.array(self.fitparams)=='teff')
@@ -524,7 +584,7 @@ class BOSSANNModel():
         if verbose:
             print('Initial estimates: ',estimates)
             
-        try:
+        try:            
             pars,pcov = curve_fit(self.model,spec.wave,spec.flux,p0=estimates,
                                   sigma=spec.err,bounds=bounds,jac=self.jac)
             perror = np.sqrt(np.diag(pcov))
