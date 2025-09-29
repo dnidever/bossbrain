@@ -6,7 +6,7 @@ import traceback
 from astropy.table import Table
 from scipy.optimize import curve_fit
 from theborg.emulator import Emulator
-from dlnpyutils import utils as dln
+from dlnpyutils import utils as dln,lsqr
 import doppler
 from doppler.spec1d import Spec1D
 from . import utils
@@ -69,6 +69,7 @@ class BOSSANNModel():
         self.fluxed = fluxed
         self.verbose = verbose
         self.fitparams = None
+        self.nmodel = 0
         self.njac = 0
         
     def mklabels(self,pars):
@@ -130,15 +131,15 @@ class BOSSANNModel():
         for i in range(len(params)):
             if params[i].lower()=='alpham':   # mean alpha
                 ind = self._alphaindex.copy()
-                bounds[0][i] = np.max(self.ranges[ind,0])
-                bounds[1][i] = np.min(self.ranges[ind,1])
+                bounds[0][i] = np.max(self.ranges[ind,0])+0.01
+                bounds[1][i] = np.min(self.ranges[ind,1])-0.01
             elif params[i].lower()=='rv':
                 bounds[0][i] = -1000
                 bounds[1][i] = 1000
             else:
                 ind, = np.where(np.array(self.labels)==params[i].lower())
-                bounds[0][i] = self.ranges[ind,0]
-                bounds[1][i] = self.ranges[ind,1]
+                bounds[0][i] = self.ranges[ind,0]+0.01
+                bounds[1][i] = self.ranges[ind,1]-0.01
         return bounds
     
     def inrange(self,pars):
@@ -259,12 +260,7 @@ class BOSSANNModel():
             
         # Get label array
         #  vrel is not in "pars", input separately
-        try:
-            labels = self.mklabels(pars)
-        except:
-            traceback.print_exc()
-            print('problems')
-            import pdb; pdb.set_trace()
+        labels = self.mklabels(pars)
             
         # Are we making a fluxed spectrum?
         if fluxed is None:
@@ -302,7 +298,8 @@ class BOSSANNModel():
             flux *= cont
             
         # Doppler shift
-        if vrel is None:
+        if (vrel is None and hasattr(self,'_spobs') and self._spobs is not None and
+            hasattr(self._spobs,'vrel') and self._spobs.vrel is not None):
             vrel = self._spobs.vrel
         if vrel is not None and vrel != 0.0:
             redwave = wave*(1+vrel/cspeed)  # redshift the wavelengths
@@ -363,6 +360,7 @@ class BOSSANNModel():
             labelparams = pars
             
         out = self(labelparams,**kwargs)
+        self.nmodel += 1
         # Only return the flux
         if isinstance(out,Spec1D):
             return out.flux
@@ -436,7 +434,7 @@ class BOSSANNModel():
             if ind==0:
                 step = 10.0                
             else:
-                step = 0.05
+                step = 0.02
             if self.fitparams[i]=='rv':
                 isrv = True
                 step = 1.0
@@ -449,14 +447,18 @@ class BOSSANNModel():
                 if targs[i]+step > 1000:
                     step *= -1
             else:
-                if targs[i]+step>self.ranges[ind,1]:
+                if targs[i]+step>=self.ranges[ind,1]-0.01:
                     step *= -1
             targs[i] += step
             # Remove dummy logg if using logg relation
             if self.loggrelation:
                 targs = np.delete(targs,self.loggind)
             #print(i,step,targs)
-            f1 = self.model(wave,*targs,**kwargs)
+            try:
+                f1 = self.model(wave,*targs,**kwargs)
+            except:
+                traceback.print_exc()
+                import pdb; pdb.set_trace()
             fjac[:,i] = (f1-f0)/steps[i]
             
         self.njac += 1
@@ -533,6 +535,9 @@ class BOSSANNModel():
             if estimates is None:
                 estimates = {'teff':dopout['teff'][0],'logg':dopout['logg'][0],
                              'mh':dopout['feh'][0]}
+                estimates['teff'] = dln.limit(dopout['teff'][0],bounds[0][0]+1,bounds[1][0]-1)
+                estimates['logg'] = dln.limit(dopout['logg'][0],bounds[0][1]+0.01,bounds[1][1]-0.01)
+                estimates['mh'] = dln.limit(dopout['feh'][0],bounds[0][2]+0.01,bounds[1][2]-0.01)
         # Using input vrel or default of 0.0
         else:
             if vrel is None:
@@ -617,7 +622,7 @@ class BOSSANNModel():
             
         if verbose:
             print('Initial estimates: ',estimates)
-            
+
         try:
             pars,pcov = curve_fit(self.model,spec.wave,spec.flux,p0=estimates,
                                   sigma=spec.err,bounds=bounds,jac=self.jac)
