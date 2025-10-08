@@ -431,7 +431,7 @@ class BOSSANNModel():
             if self.loggrelation and i==self.loggind:
                 continue
             targs = np.array(copy.deepcopy(fullargs))
-            if ind==0:
+            if len(ind)==0:
                 step = 10.0                
             else:
                 step = 0.02
