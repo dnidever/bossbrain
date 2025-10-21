@@ -55,15 +55,49 @@ class BOSSANNModel():
         npix_model = 14001
         self._dispersion = np.arange(npix_model)*0.5+3500.0
 
-        # Get logg label
-        loggind, = np.where(np.char.array(self.labels).lower()=='logg')
-        if len(loggind)==0:                
-            raise ValueError('No logg label')
-        self.loggind = loggind[0]
-        
-        # Load the ANN model for logg-relationship
-        logg_model = Emulator.load(utils.datadir()+'apogeedr17_rgb_logg_ann.npz')
-        self.logg_model = logg_model
+
+        # Use logg relation
+        if loggrelation:
+            # Get logg label
+            loggind, = np.where(np.char.array(self.labels).lower()=='logg')
+            if len(loggind)==0:                
+                raise ValueError('No logg label')
+            self.loggind = loggind[0]
+            # Get temperature label
+            teffind, = np.where(np.char.array(self.labels).lower()=='teff')
+            if len(teffind)==0:
+                teffind, = np.where(np.char.array(self.labels).lower().find('temp')>-1)
+            self.teffind = teffind[0]
+            # Get metallicity label
+            fehind, = np.where(np.char.array(self.labels).lower()=='feh')
+            if len(fehind)==0:
+                fehind, = np.where(np.char.array(self.labels).lower()=='metal')
+            if len(fehind)==0:
+                fehind, = np.where(np.char.array(self.labels).lower()=='mh')                
+            if len(fehind)==0:
+                fehind, = np.where(np.char.array(self.labels).lower()=='[fe/h]')
+            if len(fehind)==0:
+                fehind, = np.where(np.char.array(self.labels).lower()=='[m/h]')                
+            if len(fehind)==0:
+                raise ValueError('No metallicity label')
+            self.fehind = fehind[0]
+            # Get alpha abundance label
+            alphaind, = np.where(np.char.array(self.labels).lower()=='[alpha/fe]')
+            if len(alphaind)==0:
+                alphaind, = np.where(np.char.array(self.labels).lower()=='alphafe')
+            if len(alphaind)==0:
+                alphaind, = np.where(np.char.array(self.labels).lower()=='alpha_fe')
+            if len(alphaind)==0:
+                alphaind, = np.where(np.char.array(self.labels).lower().find('alpha')>-1)
+            if len(alphaind)==0:
+                self.alphaind = None
+            else:
+                self.alphaind = alphaind[0]
+            # Load the ANN model
+            logg_model = Emulator.load(utils.datadir()+'apogeedr17_rgb_logg_ann.npz')
+            logg_model.ranges = np.array([np.min(logg_model.training_labels,axis=0),
+                                          np.max(logg_model.training_labels,axis=0)]).T
+            self.logg_model = logg_model
         
         self.loggrelation = loggrelation
         self.fluxed = fluxed
@@ -162,11 +196,14 @@ class BOSSANNModel():
         # Insert a dummy value for logg
         newpars = np.insert(pars,self.loggind,0.0)
         teff = newpars[self.teffind]
+        teff = np.clip(teff,self.logg_model.ranges[0,0],self.logg_model.ranges[0,1])
         feh = newpars[self.fehind]
+        feh = np.clip(feh,self.logg_model.ranges[1,0],self.logg_model.ranges[1,1])
         if self.alphaind is not None:
             alpha = newpars[self.alphaind]
         else:
             alpha = 0.0
+        alpha = np.clip(alpha,self.logg_model.ranges[2,0],self.logg_model.ranges[2,1])
         logg = self.logg_model([teff,feh,alpha],border='extrapolate')
         newpars[self.loggind] = logg
         return newpars
