@@ -125,11 +125,14 @@ class BOSSANNModel():
         # List or array input
         else:
             # Make full parameter array
-            if self.fitparams is not None and len(pars) != len(self.labels):
-                fitlabels = [p.lower() for p in self.fitparams if p.lower() != 'rv']
+            #  input array should have same elements as allparams
+            #  or one less if 'rv' was removed
+            if self.allparams is not None and ((len(pars) == len(self.allparams)) |
+                                               (len(pars) == len(self.allparams)-1)):
+                fitlabels = [p.lower() for p in self.allparams if p.lower() != 'rv']
                 fitlabels = np.array(fitlabels)
                 if len(pars) != len(fitlabels):
-                    raise ValueError('pars size not consistent with fitparams')
+                    raise ValueError('pars size not consistent with allparams')
                 labels = np.zeros(self.nlabels)
                 for i in range(len(fitlabels)):
                     if fitlabels[i]=='alpham':   # mean alpha
@@ -139,8 +142,6 @@ class BOSSANNModel():
                     labels[ind] = pars[i]
             else:
                 labels = pars
-            #if len(labels)<len(self.labels):
-            #    raise ValueError('pars must have '+str(len(self.labels))+' elements')
 
         return labels
 
@@ -159,10 +160,14 @@ class BOSSANNModel():
                 return m
         return None
     
-    def mkbounds(self,params):
+    def mkbounds(self,params,fixparams={}):
         """ Make bounds for input parameter names."""
         bounds = [np.zeros(len(params)),np.zeros(len(params))]
         for i in range(len(params)):
+            if params[i] in fixparams.keys():
+                bounds[0][i] = fixparams[params[i]]-1e-7
+                bounds[1][i] = fixparams[params[i]]+1e-7
+                continue
             if params[i].lower()=='alpham':   # mean alpha
                 ind = self._alphaindex.copy()
                 bounds[0][i] = np.max(self.ranges[ind,0])+0.01
@@ -212,16 +217,16 @@ class BOSSANNModel():
         """ Print out parameters and errors."""
         
         for i in range(len(pars)):
-            if self.fitparams is not None and len(pars) != self.nlabels:
-                name = self.fitparams[i]
+            if self.allparams is not None and len(pars) != self.nlabels:
+                name = self.allparams[i]
             else:
                 name = self.labels[i]
-            if i==0:
+            if name=='teff':
                 print('{:6s}: {:10.1f} +/- {:5.2g}'.format(name,pars[i],perror[i]))
             else:
                 print('{:6s}: {:10.4f} +/- {:5.3g}'.format(name,pars[i],perror[i]))
 
-    def randompars(self,params=None,n=100):
+    def randompars(self,params=None,fixparams={},n=100):
         """ Create random parameters for initial guesses."""
         if params is None:
             params = self.fitparams
@@ -230,6 +235,9 @@ class BOSSANNModel():
         nlabelparams = len(labelparams)
         rndpars = np.zeros((n,nlabelparams),float)
         for i in range(nlabelparams):
+            if labelparams[i] in fixparams.keys():
+                rndpars[:,i] = fixparams[labelparams[i]]
+                continue
             if labelparams[i].lower() == 'alpham':
                 ind = self._alphaindex.copy()
                 vmin = np.max(self.ranges[ind,0])
@@ -302,7 +310,7 @@ class BOSSANNModel():
         # Are we making a fluxed spectrum?
         if fluxed is None:
             fluxed = self.fluxed
-        
+            
         # Check that the labels are in range
         flag,badindex,rr = self.inrange(labels)
         if flag==False:
@@ -388,14 +396,14 @@ class BOSSANNModel():
             print('model: ',pars)
             
         # remove RV
-        if 'rv' in self.fitparams:
-            labelparams = [item[1] for item in zip(self.fitparams,pars) if item[0] != 'rv']
-            ind, = np.where(self.fitparams=='rv')
+        if 'rv' in self.allparams:
+            labelparams = [item[1] for item in zip(self.allparams,pars) if item[0] != 'rv']
+            ind, = np.where(self.allparams=='rv')
             vrel = pars[ind[0]]
             kwargs['vrel'] = vrel
         else:
             labelparams = pars
-            
+        
         out = self(labelparams,**kwargs)
         self.nmodel += 1
         # Only return the flux
@@ -433,9 +441,9 @@ class BOSSANNModel():
         """
 
         # add RV, if we are fitting it
-        if 'rv' in self.fitparams:
+        if 'rv' in self.allparams:
             # remove vrel at the end of args array
-            rvind, = np.where(self.fitparams=='rv')
+            rvind, = np.where(self.allparams=='rv')
             labelargs = np.array(args).copy()
             labelargs = np.delete(labelargs,rvind)
             fullargs = self.mklabels(labelargs)
@@ -457,22 +465,22 @@ class BOSSANNModel():
             
         # Initialize jacobian matrix
         npix = len(wave)
-        fjac = np.zeros((npix,len(self.fitparams)),np.float64)
+        fjac = np.zeros((npix,len(self.allparams)),np.float64)
         
         # Loop over parameters
         pars = np.array(copy.deepcopy(args))
         f0 = self.model(wave,*pars,**kwargs)        
-        steps = np.zeros(len(self.fitparams))
-        for i in range(len(self.fitparams)):
-            ind, = np.where(np.array(self.labels)==self.fitparams[i])
+        steps = np.zeros(len(self.allparams))
+        for i in range(len(self.allparams)):
+            ind, = np.where(np.array(self.labels)==self.allparams[i])
             if self.loggrelation and i==self.loggind:
                 continue
             targs = np.array(copy.deepcopy(fullargs))
-            if len(ind)==0:
+            if self.allparams[i]=='teff':
                 step = 10.0                
             else:
                 step = 0.02
-            if self.fitparams[i]=='rv':
+            if self.allparams[i]=='rv':
                 isrv = True
                 step = 1.0
             else:
@@ -503,7 +511,7 @@ class BOSSANNModel():
         return fjac
         
     
-    def fit(self,spec,vrel=None,fitparams=None,loggrelation=False,normalize=False,
+    def fit(self,spec,vrel=None,fitparams=None,fixparams={},loggrelation=False,normalize=False,
             initgrid=True,estimates=None,outlier=False,skipdoppler=False,verbose=False):
         """
         Fit an observed spectrum with the ANN models and curve_fit.
@@ -512,32 +520,37 @@ class BOSSANNModel():
         ----------
         spec : Spec1D 
            Spectrum to fit.
-        vrel : list
+        vrel : float, optional
            Input list of doppler shifts for the spectra.
-        cont : int, optional
-           Continuum parameter:
-            1   polynomial fitting  (ncont order, 0-constant, 1-linear)
-            2   segmented normaleization  (ncont segments)
-            3   running mean  (ncont pixels)
-        ncont : int, optional
-           Number for continuum normalization.  If cont=1, then ncont
-            gives the polynomial order.  If cont=2, then ncont is the
-            number of segements.  If cont=3, then ncont is the number
-            of pixels for the running mean.
+        fitparams : list, optional
+           List of names of parameters to fit.  By default, all ANN labels
+              and RV are fit.
+        fixparams : dict, optional
+           Dictionary of parameter names and the values to fix them to.
         loggrelation : bool, optional
            Use the logg-relation as a function of Teff/feh/alpha.
+        normalize : bool, optional
+           Use the normalized spectra.  Default is False.
+        initgrid : bool, optional
+           Try an initial grid of stellar parameters. Default is True.
+        estimates : numpy array or list, optional
+           List of initial estimates for fitparams.
+        outlier : bool, optional
+           Mask outlier pixels in the spectrum. Default is False.
+        skipdoppler : bool, optional
+           Skip running Doppler at the beginning. Default is False.
+        verbose : bool, optional
+           Verbose output to screen.  Default is False.
 
         Returns
         -------
-        tab : table
-           Output table of values.
-        info : list
-           List of dictionaries, one per spectrum, that includes spectra and arrays.
+        out : table
+           Output table of values and spectra.
 
         Example
         -------
 
-        tab,info = fit(spec)
+        out = fit(spec)
 
         """
 
@@ -557,9 +570,27 @@ class BOSSANNModel():
         fitparams = [p.lower() for p in fitparams]
         self.fitparams = np.array(fitparams)
         nfitparams = len(fitparams)
-
+        nfixparams = len(fixparams)
+        self.fixparams = fixparams
+        # check that fixparam names are correct
+        if nfixparams>0:
+            for c in fixparams.keys():
+                if c.lower() not in self.labels+['rv']:
+                    raise Exception(str(c)+' not one of the labels or rv')
+        nallparams = nfitparams+nfixparams
+        if nfixparams>0:
+            allparams = np.unique(fitparams+list(fixparams.keys()))
+        else:
+            allparams = np.unique(fitparams)
+        allparams = [a.lower() for a in allparams]   # lowercase
+        if 'rv' in allparams:  # force 'rv' to be at the end
+            allparams = list(allparams)
+            allparams.remove('rv')
+            allparams += ['rv']
+        self.allparams = np.array(allparams)
+        
         # Make bounds
-        bounds = self.mkbounds(fitparams)
+        bounds = self.mkbounds(allparams,fixparams)
 
         # Use spec.vrel
         if vrel is None and hasattr(spec,'vrel') and getattr(spec,'vrel') is not None:
@@ -614,10 +645,10 @@ class BOSSANNModel():
             #    agrid = np.arange(nsample)*astep+self._ranges[0,3,0]+astep*0.5
             #    tgrid2d,ggrid2d,mgrid2d,agrid2d = np.meshgrid(tgrid,ggrid,mgrid,agrid)
             #    gridpars = np.vstack((tgrid2d.flatten(),ggrid2d.flatten(),mgrid2d.flatten(),agrid2d.flatten())).T
-
+            
             # These are only for the LABELS, not RV
-            gridpars = self.randompars(self.fitparams,ngrid)
-            fitlabels = [p.lower() for p in self.fitparams if p.lower() != 'rv']
+            gridpars = self.randompars(self.allparams,fixparams=fixparams,n=ngrid)
+            fitlabels = [p.lower() for p in self.allparams if p.lower() != 'rv']
             fitlabels = np.array(fitlabels)
             if verbose:
                print('Testing an initial set of '+str(gridpars.shape[0])+' random parameters')
