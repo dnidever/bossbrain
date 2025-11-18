@@ -518,11 +518,7 @@ class BOSSANNModel():
             if self.loggrelation:
                 targs = np.delete(targs,self.loggind)
             #print(i,step,targs)
-            try:
-                f1 = self.model(wave,*targs,**kwargs)
-            except:
-                traceback.print_exc()
-                import pdb; pdb.set_trace()
+            f1 = self.model(wave,*targs,**kwargs)
             fjac[:,i] = (f1-f0)/steps[i]
             
         self.njac += 1
