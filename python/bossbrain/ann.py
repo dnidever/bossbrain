@@ -103,6 +103,7 @@ class BOSSANNModel():
         self.fluxed = fluxed
         self.verbose = verbose
         self.fitparams = None
+        self.allparams = None
         self.nmodel = 0
         self.njac = 0
         
@@ -256,14 +257,32 @@ class BOSSANNModel():
 
     def fiducialspec(self):
         """ Default BOSS resolution and wavelength spectrum."""
-        # Default observed spectrum            
-        wobs_coef = np.array([-1.51930967e-09, -5.46761333e-06,  2.39684716e+00,  8.99994494e+03])            
-        # 3847 observed pixels
-        npix_obs = 3847
-        wobs = np.polyval(wobs_coef,np.arange(npix_obs))
+        # Default observed spectrum
+        wobs_coef = np.array([0.00010, 3.55230])  # log wavelength
+        # 4648 observed pixels
+        npix_obs = 4648
+        x = np.arange(npix_obs)
+        wobs = 10**np.polyval(wobs_coef,x)
+        # resolution in three parts
+        # these are piece-wise polynomial fits to WRESL which is FWHM
+        # 1: 400-2165
+        lpars1 = np.array([ 6.83669706e-14, -1.10388358e-10, -4.21884602e-07,
+                            8.35079141e-04, 2.67629137e+00])
+        # 2: 2165-2519
+        lpars2 = np.array([-1.82241977e-11,  1.81121293e-07, -6.74495096e-04,
+                           1.11666990e+00, -6.90795349e+02])
+        # 3: 2519-4625
+        lpars3 = np.array([ 9.84869119e-14, -1.31647649e-09,  6.58716558e-06,
+                            -1.44335837e-02, 1.50830710e+01])
+        lsfsigma = np.zeros(npix_obs,float)
+        lsfsigma[400:2165] = np.polyval(lpars1,x[400:2165])
+        lsfsigma[2165:2519] = np.polyval(lpars2,x[2165:2519])
+        lsfsigma[2519:4625] = np.polyval(lpars3,x[2519:4625])
+        lsfsigma[:400] = lsfsigma[400]
+        lsfsigma[4625:] = lsfsigma[4624]
+        lsfsigma /= 2.35    # convert from FWHM to SIGMA
         spobs = Spec1D(np.zeros(npix_obs),wave=wobs,err=np.ones(npix_obs),
-                       lsfpars=np.array([ 1.05094118e+00, -3.37514635e-06]),
-                       lsftype='Gaussian',lsfxtype='wave')        
+                       lsfsigma=lsfsigma,lsftype='Gaussian',lsfxtype='wave')        
         return spobs
     
     def __call__(self,pars=None,spobs=None,snr=None,vrel=None,normalize=False,
