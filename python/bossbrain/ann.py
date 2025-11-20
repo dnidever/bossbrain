@@ -7,6 +7,8 @@ from astropy.table import Table
 from scipy.optimize import curve_fit
 from theborg.emulator import Emulator
 from dlnpyutils import utils as dln,lsqr
+import emcee
+import corner
 import doppler
 from doppler.spec1d import Spec1D
 from . import utils
@@ -55,32 +57,22 @@ class BOSSANNModel():
         npix_model = 14001
         self._dispersion = np.arange(npix_model)*0.5+3500.0
 
-
+        # Get logg label
+        loggind, = np.where(np.char.array(self.labels).lower()=='logg')
+        if len(loggind)==0:                
+            raise ValueError('No logg label')
+        self.loggind = loggind[0]
+        # Get temperature label
+        teffind, = np.where(np.char.array(self.labels).lower()=='teff')
+        if len(teffind)==0:
+            teffind, = np.where(np.char.array(self.labels).lower().find('temp')>-1)
+        self.teffind = teffind[0]
+        # Get metallicity label
+        mhind, = np.where(np.char.array(self.labels).lower()=='mh')                
+        self.mhind = mhind[0]
+            
         # Use logg relation
         if loggrelation:
-            # Get logg label
-            loggind, = np.where(np.char.array(self.labels).lower()=='logg')
-            if len(loggind)==0:                
-                raise ValueError('No logg label')
-            self.loggind = loggind[0]
-            # Get temperature label
-            teffind, = np.where(np.char.array(self.labels).lower()=='teff')
-            if len(teffind)==0:
-                teffind, = np.where(np.char.array(self.labels).lower().find('temp')>-1)
-            self.teffind = teffind[0]
-            # Get metallicity label
-            fehind, = np.where(np.char.array(self.labels).lower()=='feh')
-            if len(fehind)==0:
-                fehind, = np.where(np.char.array(self.labels).lower()=='metal')
-            if len(fehind)==0:
-                fehind, = np.where(np.char.array(self.labels).lower()=='mh')                
-            if len(fehind)==0:
-                fehind, = np.where(np.char.array(self.labels).lower()=='[fe/h]')
-            if len(fehind)==0:
-                fehind, = np.where(np.char.array(self.labels).lower()=='[m/h]')                
-            if len(fehind)==0:
-                raise ValueError('No metallicity label')
-            self.fehind = fehind[0]
             # Get alpha abundance label
             alphaind, = np.where(np.char.array(self.labels).lower()=='[alpha/fe]')
             if len(alphaind)==0:
@@ -133,6 +125,7 @@ class BOSSANNModel():
                 fitlabels = [p.lower() for p in self.allparams if p.lower() != 'rv']
                 fitlabels = np.array(fitlabels)
                 if len(pars) != len(fitlabels):
+                    import pdb; pdb.set_trace()
                     raise ValueError('pars size not consistent with allparams')
                 labels = np.zeros(self.nlabels)
                 for i in range(len(fitlabels)):
@@ -152,6 +145,7 @@ class BOSSANNModel():
 
     def get_best_model(self,labels):
         """ This returns the first ANN model that has the right range."""
+        # These labels should be in order
         for m in range(self.nmodels):
             ranges = self._ranges[m,:,:]
             inside = True
@@ -184,7 +178,13 @@ class BOSSANNModel():
     
     def inrange(self,pars):
         """ Check that the parameters are in range."""
-        labels = self.mklabels(pars)
+        # pull out rv
+        if len(pars)==len(self.allparams) and 'rv' in self.allparams:
+            ind, = np.where(self.allparams!='rv')
+            labels = self.mklabels(np.array(pars)[ind])
+        else:
+            labels = self.mklabels(pars)
+        # These "labels" are now in the right order
         # Get the right model to use based on input Teff/logg/feh
         modelindex = self.get_best_model(labels)
         if modelindex is None:
@@ -192,7 +192,7 @@ class BOSSANNModel():
         # Check other ranges
         for i in np.arange(1,self.nlabels):
             rr = [self._ranges[modelindex,i,0],self._ranges[modelindex,i,1]]
-            if labels[i]<rr[0] or labels[i]>rr[1]:
+            if labels[i]<=rr[0] or labels[i]>=rr[1]:
                 return False,i,rr
         return True,None,None
 
@@ -203,7 +203,7 @@ class BOSSANNModel():
         newpars = np.insert(pars,self.loggind,0.0)
         teff = newpars[self.teffind]
         teff = np.clip(teff,self.logg_model.ranges[0,0],self.logg_model.ranges[0,1])
-        feh = newpars[self.fehind]
+        feh = newpars[self.mhind]
         feh = np.clip(feh,self.logg_model.ranges[1,0],self.logg_model.ranges[1,1])
         if self.alphaind is not None:
             alpha = newpars[self.alphaind]
@@ -415,14 +415,13 @@ class BOSSANNModel():
             print('model: ',pars)
             
         # remove RV
-        if 'rv' in self.allparams:
+        if len(pars)==len(self.allparams) and 'rv' in self.allparams:
             labelparams = [item[1] for item in zip(self.allparams,pars) if item[0] != 'rv']
             ind, = np.where(self.allparams=='rv')
             vrel = pars[ind[0]]
             kwargs['vrel'] = vrel
         else:
             labelparams = pars
-        
         out = self(labelparams,**kwargs)
         self.nmodel += 1
         # Only return the flux
@@ -524,7 +523,274 @@ class BOSSANNModel():
         self.njac += 1
             
         return fjac
+
+   
+    def emcee_lnlike(self, theta, spec):
+        """
+        This helper function calculates the log likelihood for the MCMC portion of fit().
+    
+        Parameters
+        ----------
+        theta : array
+           Input parameters [teff, logg, feh, rv].
+        x : array
+           Array of x-values for y.  Not really used.
+        y : array
+           Observed flux array.
+        yerr : array
+           Uncertainties in the observed flux.
+        spec : Spec1D
+           The observed spectrum.  Needed to run cannon.model_spectrum().
+
+        Outputs
+        -------
+        lnlike : float
+           The log likelihood value.
+
+        """        
+        # treat rv separately
+        if len(theta)==len(self.allparams) and 'rv' in self.allparams:
+            rvind, = np.where(self.allparams=='rv')
+            rv = theta[rvind][0]
+            ind, = np.where(self.allparams!='rv')
+            labels = np.array(theta)[ind]
+            m = self.model(spec.wave,*labels,spobs=spec,vrel=rv)
+        else:
+            m = self.model(spec.wave,*theta,spobs=spec)
+        inv_sigma2 = 1.0/spec.err**2
+        return -0.5*(np.sum((spec.flux-m)**2*inv_sigma2))
+
+
+    def emcee_lnprior(self, theta):
+        """
+        This helper function calculates the log prior for the MCMC portion of fit().
+        It's a flat/uniform prior across the stellar parameter space covered by the
+        Cannon models.
         
+        Parameters
+        ----------
+        theta : array
+        Input parameters [teff, logg, feh, rv].
+        models : list of Cannon models
+        List of Cannon models to use
+        
+        Outputs
+        -------
+        lnprior : float
+         The log prior value.
+        
+        """
+    
+        flag,_,_ = self.inrange(theta)
+        if flag:
+            return 0.0
+        else:
+            return -np.inf
+
+    def emcee_lnprob(self, theta, spec):
+        """
+        This helper function calculates the log probability for the MCMC portion of fit().
+        
+        Parameters
+        ----------
+        theta : array
+           Input parameters/labels.
+        x : array
+           Array of x-values for y.  Not really used.
+        y : array
+           Observed flux array.
+        yerr : array
+           Uncertainties in the observed flux.
+        spec : Spec1D
+           The observed spectrum.  Needed to run cannon.model_spectrum().
+
+        Outputs
+        -------
+        lnprob : float
+           The log probability value, which is the sum of the log prior and the
+           log likelihood.
+
+        """
+        lp = self.emcee_lnprior(theta)
+        if not np.isfinite(lp):
+            return -np.inf
+        return lp + self.emcee_lnlike(theta, spec)
+
+    
+    def mcmc(self,spec,vrel=None,fitparams=None,fixparams={},loggrelation=False,
+             normalize=False,initgrid=True,estimates=None,outlier=False,steps=1000,
+             cornername=None,skipdoppler=False,verbose=False):
+        """
+        Run MCMC on the spectrum
+    
+        Parameters
+        ----------
+        spec : Spec1D object
+            The observed spectrum to match.
+        models : list of Cannon models, optional
+            A list of Cannon models to use.  The default is to load all of the Cannon
+            models in the data/ directory and use those.
+        initpar : numpy array, optional
+            Initial estimate for [teff, logg, feh, RV], optional.
+        steps : int, optional
+            Number of steps to use.  Default is 100.
+        cornername : string, optional
+            Output filename for the corner plot.  If a corner plot is requested, then the
+            minimum number of steps used is 500.
+        verbose : bool, optional
+            Verbose output of the various steps.  This is False by default.
+
+        Returns
+        -------
+        out : numpy structured array
+            The output structured array of the final derived RVs, stellar parameters and errors.
+        bmodel : Spec1D object
+            The best-fitting Cannon model spectrum (as Spec1D object).
+
+        Example
+        -------
+
+        .. code-block:: python
+        
+         out, bmodel = fit_mcmc(spec)
+        
+        """
+
+        if hasattr(spec,'vrel') == False and vrel is not None:
+            spec.vrel = vrel
+        if verbose:
+            if vrel is not None:
+                print('Vrel: {:.2f} km/s'.format(vrel))
+            print('S/N: {:.2f}'.format(spec.snr))
+        # Now normalize
+        if normalize:
+            if spec.normalized==False:
+                spec.normalize()
+
+        if fitparams is None:
+            fitparams = self.labels+['rv']
+        fitparams = [p.lower() for p in fitparams]
+        self.fitparams = np.array(fitparams)
+        nfitparams = len(fitparams)
+        nfixparams = len(fixparams)
+        self.fixparams = fixparams
+        # check that fixparam names are correct
+        if nfixparams>0:
+            for c in fixparams.keys():
+                if c.lower() not in self.labels+['rv']:
+                    raise Exception(str(c)+' not one of the labels or rv')
+        nallparams = nfitparams+nfixparams
+        if nfixparams>0:
+            allparams = np.unique(fitparams+list(fixparams.keys()))
+        else:
+            allparams = np.unique(fitparams)
+        allparams = [a.lower() for a in allparams]   # lowercase
+        # put allparams in the same order as labels
+        allparams = [c for c in self.labels+['rv'] if c in allparams]
+        self.allparams = np.array(allparams)
+
+        # Make bounds
+        bounds = self.mkbounds(allparams,fixparams)
+
+        # Use spec.vrel
+        if vrel is None and hasattr(spec,'vrel') and getattr(spec,'vrel') is not None:
+            vrel = spec.vrel
+        
+        # Run doppler if no velocity input
+        if vrel is None or skipdoppler==False:
+            dopout, dopfmodel, dopspecm = doppler.fit(spec,verbose=verbose)
+            vrel = dopout['vrel'][0]
+            if estimates is None:
+                estimates = {'teff':dopout['teff'][0],'logg':dopout['logg'][0],
+                             'mh':dopout['feh'][0]}
+                tind, = np.where(self.allparams=='teff')[0]
+                estimates['teff'] = dln.limit(dopout['teff'][0],bounds[0][tind]+1,bounds[1][tind]-1)
+                lind, = np.where(self.allparams=='logg')[0]
+                estimates['logg'] = dln.limit(dopout['logg'][0],bounds[0][lind]+0.01,bounds[1][lind]-0.01)
+                mind, = np.where(self.allparams=='mh')[0]
+                estimates['mh'] = dln.limit(dopout['feh'][0],bounds[0][mind]+0.01,bounds[1][mind]-0.01)
+        # Using input vrel or default of 0.0
+        else:
+            if vrel is None:
+                vrel = 0.0
+        spec.vrel = vrel
+
+        # initial parameter estimates
+        initpar = np.zeros(nallparams,float)
+        if estimates is not None and len(estimates)>0:
+            for i in range(len(estimates)):
+                ind, = np.where(self.allparams==list(estimates.keys())[i])
+                initpar[ind] = estimates[list(estimates.keys())[i]]
+
+        # Set up the MCMC sampler
+        ndim, nwalkers = nallparams, 50
+        delta = np.ones(nallparams)*0.1
+        tind, = np.where(self.allparams=='teff')[0]
+        delta[tind] = 50.0
+        #pos = [initpar + delta*np.random.randn(ndim) for i in range(nwalkers)]
+        pos = nwalkers*[None]
+        for i in range(nwalkers):
+            pos1 = initpar + delta*np.random.randn(ndim)
+            for j in range(nallparams):
+                pos1[j] = np.clip(pos1[j],bounds[0][j],bounds[1][j])
+            pos[i] = pos1
+
+        sampler = emcee.EnsembleSampler(nwalkers, ndim, self.emcee_lnprob,
+                                        args=(spec),live_dangerously=True)
+
+        if cornername is not None: steps=np.maximum(steps,500)  # at least 500 steps
+        out = sampler.run_mcmc(pos, steps, skip_initial_state_check=True)
+        
+        samples = sampler.chain[:, int(steps/2):, :].reshape((-1, ndim))
+
+        # Get the median and stddev values
+        pars = np.zeros(ndim,float)
+        parerr = np.zeros(ndim,float)
+        if verbose is True: print('MCMC values:')
+        names = self.allparams
+        for i in range(ndim):
+            t = np.percentile(samples[:,i],[16,50,84])
+            pars[i] = t[1]
+            parerr[i] = (t[2]-t[0])*0.5
+        if verbose is True: printpars(pars,parerr)
+        
+        # The maximum likelihood parameters
+        bestind = np.unravel_index(np.argmax(sampler.lnprobability),sampler.lnprobability.shape)
+        pars_ml = sampler.chain[bestind[0],bestind[1],:]
+
+        # treat rv separately
+        if len(pars_ml)==len(self.allparams) and 'rv' in self.allparams:
+            rvind, = np.where(self.allparams=='rv')
+            rv = pars_ml[rvind][0]
+            ind, = np.where(self.allparams!='rv')
+            labels = np.array(pars_ml)[ind]
+            mcmodel = self(labels,spobs=spec,vrel=rv)
+        else:
+            mcmodel = self(pars_ml,spobs=spec)
+        mcchisq = np.sqrt(np.sum(((spec.flux-mcmodel.flux)/spec.err)**2)/(spec.npix*spec.norder))
+
+        # Put it into the output structure
+        dtype = np.dtype([('label',(str,50),ndim),('pars',float,ndim),('pars_ml',float,ndim),('parerr',float,ndim),('chisq',float)])
+        out = np.zeros(1,dtype=dtype)
+        out['label'] = self.allparams
+        out['pars'] = pars
+        out['pars_ml'] = pars_ml    
+        out['parerr'] = parerr
+        out['chisq'] = mcchisq
+    
+        # Corner plot
+        if cornername is not None:
+            backend = matplotlib.rcParams['backend']        
+            matplotlib.use('Agg')
+            fig = corner.corner(samples, labels=self.allparams, truths=pars)
+            plt.savefig(cornername)
+            plt.close(fig)
+            print('Corner plot saved to '+cornername)
+            matplotlib.use(backend)  # back to the original backend
+        
+        return out,mcmodel
+    
+    
     
     def fit(self,spec,vrel=None,fitparams=None,fixparams={},loggrelation=False,normalize=False,
             initgrid=True,estimates=None,outlier=False,skipdoppler=False,verbose=False):
@@ -598,10 +864,8 @@ class BOSSANNModel():
         else:
             allparams = np.unique(fitparams)
         allparams = [a.lower() for a in allparams]   # lowercase
-        if 'rv' in allparams:  # force 'rv' to be at the end
-            allparams = list(allparams)
-            allparams.remove('rv')
-            allparams += ['rv']
+        # put allparams in the same order as labels
+        allparams = [c for c in self.labels+['rv'] if c in allparams]
         self.allparams = np.array(allparams)
         
         # Make bounds
@@ -618,9 +882,12 @@ class BOSSANNModel():
             if estimates is None:
                 estimates = {'teff':dopout['teff'][0],'logg':dopout['logg'][0],
                              'mh':dopout['feh'][0]}
-                estimates['teff'] = dln.limit(dopout['teff'][0],bounds[0][0]+1,bounds[1][0]-1)
-                estimates['logg'] = dln.limit(dopout['logg'][0],bounds[0][1]+0.01,bounds[1][1]-0.01)
-                estimates['mh'] = dln.limit(dopout['feh'][0],bounds[0][2]+0.01,bounds[1][2]-0.01)
+                tind, = np.where(self.allparams=='teff')[0]
+                estimates['teff'] = dln.limit(dopout['teff'][0],bounds[0][tind]+1,bounds[1][tind]-1)
+                lind, = np.where(self.allparams=='logg')[0]
+                estimates['logg'] = dln.limit(dopout['logg'][0],bounds[0][lind]+0.01,bounds[1][lind]-0.01)
+                mind, = np.where(self.allparams=='mh')[0]
+                estimates['mh'] = dln.limit(dopout['feh'][0],bounds[0][mind]+0.01,bounds[1][mind]-0.01)
         # Using input vrel or default of 0.0
         else:
             if vrel is None:
