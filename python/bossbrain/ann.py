@@ -618,7 +618,7 @@ class BOSSANNModel():
 
     
     def mcmc(self,spec,vrel=None,fitparams=None,fixparams={},loggrelation=False,
-             normalize=False,initgrid=True,estimates=None,outlier=False,steps=1000,
+             normalize=False,initgrid=True,estimates=None,outlier=False,steps=100,
              cornername=None,skipdoppler=False,verbose=False):
         """
         Run MCMC on the spectrum
