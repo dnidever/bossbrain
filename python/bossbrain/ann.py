@@ -179,8 +179,12 @@ class BOSSANNModel():
     def inrange(self,pars):
         """ Check that the parameters are in range."""
         # pull out rv
-        if len(pars)==len(self.allparams) and 'rv' in self.allparams:
-            ind, = np.where(self.allparams!='rv')
+        if self.allparams is not None:
+            allparams = self.allparams
+        else:
+            allparams = self.labels
+        if len(pars)==len(allparams) and 'rv' in allparams:
+            ind, = np.where(allparams!='rv')
             labels = self.mklabels(np.array(pars)[ind])
         else:
             labels = self.mklabels(pars)
@@ -329,6 +333,9 @@ class BOSSANNModel():
         # Are we making a fluxed spectrum?
         if fluxed is None:
             fluxed = self.fluxed
+
+        if fiducial and spobs is None:   # use fiducial values
+            spobs = self.fiducialspec()
             
         # Check that the labels are in range
         flag,badindex,rr = self.inrange(labels)
@@ -519,7 +526,7 @@ class BOSSANNModel():
             #print(i,step,targs)
             f1 = self.model(wave,*targs,**kwargs)
             fjac[:,i] = (f1-f0)/steps[i]
-            
+                
         self.njac += 1
             
         return fjac
@@ -934,11 +941,12 @@ class BOSSANNModel():
             fitlabels = np.array(fitlabels)
             if verbose:
                print('Testing an initial set of '+str(gridpars.shape[0])+' random parameters')
-
             # Use input estimates
             if estimates is not None:
                 for i in range(len(estimates.keys())):
                     key = list(estimates.keys())[i]
+                    if key in fixparams.keys():   # skip fixed parameters
+                        continue
                     ind, = np.where(fitlabels == key.lower())
                     if len(ind)>0:
                         gridpars[:,ind[0]] = estimates[key]
