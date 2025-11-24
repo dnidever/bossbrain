@@ -5,7 +5,7 @@ from setuptools import setup, find_packages, find_namespace_packages
 from setuptools.command.install import install
 
 setup(name='bossbrain',
-      version='1.0.11',
+      version='1.0.12',
       description='Abundance determination for BOSS Spectra',
       author='David Nidever',
       author_email='dnidever@montana.edu',
