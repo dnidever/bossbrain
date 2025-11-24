@@ -11,6 +11,7 @@ import emcee
 import corner
 import doppler
 from doppler.spec1d import Spec1D
+import matplotlib.pyplot as plt
 from . import utils
 
 cspeed = 2.99792458e5  # speed of light in km/s
@@ -422,14 +423,19 @@ class BOSSANNModel():
             print('model: ',pars)
             
         # remove RV
-        if len(pars)==len(self.allparams) and 'rv' in self.allparams:
+        #if len(pars)==len(self.allparams) and 'rv' in self.allparams:
+        if 'rv' in self.allparams:
             labelparams = [item[1] for item in zip(self.allparams,pars) if item[0] != 'rv']
             ind, = np.where(self.allparams=='rv')
             vrel = pars[ind[0]]
             kwargs['vrel'] = vrel
         else:
             labelparams = pars
-        out = self(labelparams,**kwargs)
+        try:
+            out = self(labelparams,**kwargs)
+        except:
+            print('model problems')
+            import pdb; pdb.set_trace()
         self.nmodel += 1
         # Only return the flux
         if isinstance(out,Spec1D):
@@ -759,7 +765,7 @@ class BOSSANNModel():
             t = np.percentile(samples[:,i],[16,50,84])
             pars[i] = t[1]
             parerr[i] = (t[2]-t[0])*0.5
-        if verbose is True: printpars(pars,parerr)
+        if verbose is True: self.printpars(pars,parerr)
         
         # The maximum likelihood parameters
         bestind = np.unravel_index(np.argmax(sampler.lnprobability),sampler.lnprobability.shape)
@@ -800,7 +806,7 @@ class BOSSANNModel():
     
     
     def fit(self,spec,vrel=None,fitparams=None,fixparams={},loggrelation=False,normalize=False,
-            initgrid=True,estimates=None,outlier=False,skipdoppler=False,verbose=False):
+            initgrid=True,estimates={},outlier=False,skipdoppler=False,verbose=False):
         """
         Fit an observed spectrum with the ANN models and curve_fit.
 
@@ -821,8 +827,8 @@ class BOSSANNModel():
            Use the normalized spectra.  Default is False.
         initgrid : bool, optional
            Try an initial grid of stellar parameters. Default is True.
-        estimates : numpy array or list, optional
-           List of initial estimates for fitparams.
+        estimates : list/dict, optional
+           List of initial estimates for fitparams, or dict of initial estimates.
         outlier : bool, optional
            Mask outlier pixels in the spectrum. Default is False.
         skipdoppler : bool, optional
@@ -886,27 +892,36 @@ class BOSSANNModel():
         if vrel is None and skipdoppler==False:
             dopout, dopfmodel, dopspecm = doppler.fit(spec,verbose=verbose)
             vrel = dopout['vrel'][0]
+            # add estimates for teff/logg/mh/rv
             if estimates is None:
                 estimates = {'teff':dopout['teff'][0],'logg':dopout['logg'][0],
-                             'mh':dopout['feh'][0]}
-                tind, = np.where(self.allparams=='teff')[0]
-                estimates['teff'] = dln.limit(dopout['teff'][0],bounds[0][tind]+1,bounds[1][tind]-1)
-                lind, = np.where(self.allparams=='logg')[0]
-                estimates['logg'] = dln.limit(dopout['logg'][0],bounds[0][lind]+0.01,bounds[1][lind]-0.01)
-                mind, = np.where(self.allparams=='mh')[0]
-                estimates['mh'] = dln.limit(dopout['feh'][0],bounds[0][mind]+0.01,bounds[1][mind]-0.01)
+                             'mh':dopout['feh'][0],'rv':dopout['vrel'][0]}
+            else:
+                if 'teff' not in estimates.keys():
+                    estimates['teff'] = dopout['teff'][0]
+                if 'logg' not in estimates.keys():
+                    estimates['logg'] = dopout['logg'][0]
+                if 'mh' not in estimates.keys():
+                    estimates['mh'] = dopout['feh'][0]
+                if 'rv' not in estimates.keys():
+                    estimates['rv'] = dopout['vrel'][0] 
+            # Limit the estimates to be within the bounds
+            for k in list(estimates.keys()):
+                ind, = np.where(self.allparams==k)
+                if len(ind)>0:
+                    estimates[k] = dln.limit(estimates[k],bounds[0][ind[0]]+1,bounds[1][ind[0]]-1)
+                    if k=='rv':
+                        vrel = estimates[k]
         # Using input vrel or default of 0.0
         else:
             if vrel is None:
                 vrel = 0.0
         spec.vrel = vrel
             
-            
         # Save the spectrum to fit
         self._spobs = spec
 
         # ADD AN OPTION TO AUTOMATICALLY SCALE THE LSF SIGMA ARRAY
-        
         
         # Run set of ~100 points to get first estimate
         ngrid = 100
@@ -982,8 +997,12 @@ class BOSSANNModel():
             print('Initial estimates: ',estimates)
 
         try:
+            #try:
             pars,pcov = curve_fit(self.model,spec.wave,spec.flux,p0=estimates,
                                   sigma=spec.err,bounds=bounds,jac=self.jac)
+            #except:
+            #    print('curve_fit problem')
+            #    import pdb; pdb.set_trace()
             perror = np.sqrt(np.diag(pcov))
             bestmodel = self.model(spec.wave,*pars)
             chisq = np.sum((spec.flux-bestmodel)**2/spec.err**2)/spec.size
