@@ -11,6 +11,7 @@ import emcee
 import corner
 import doppler
 from doppler.spec1d import Spec1D
+import matplotlib
 import matplotlib.pyplot as plt
 from . import utils
 
@@ -99,9 +100,24 @@ class BOSSANNModel():
         self.allparams = None
         self.nmodel = 0
         self.njac = 0
+
+
+    @property
+    def nfitparams(self):
+        if self.fitparams is None:
+            return 0
+        else:
+            return len(self.fitparams)
+
+    @property
+    def nallparams(self):
+        if self.allparams is None:
+            return 0
+        else:
+            return len(self.allparams)
         
     def mklabels(self,pars):
-        """ Make the labels array from a dictionary."""
+        """ Make the ANN labels array from a dictionary."""
         # Dictionary input
         if type(pars) is dict:
             labels = np.zeros(self.nlabels)
@@ -109,6 +125,8 @@ class BOSSANNModel():
             for k in pars.keys():
                 if k=='alpham':   # mean alpha
                     ind = self._alphaindex.copy()
+                elif k=='rv' or k=='vrel':
+                    pass
                 else:
                     ind, = np.where(np.array(self.labels)==k.lower())
                 if len(ind)==0:
@@ -326,11 +344,27 @@ class BOSSANNModel():
         # If no pars input, use mean values
         if pars is None:
             pars = self.meanlabels()
-            
+
+        # PARS must be
+        # -dictionary
+        # -array of length Nlabels or Nlabels+1 (plus RV)
+        if isinstance(pars,dict):
+            labels = self.mklabels(pars)
+        elif isinstance(pars,np.ndarray):
+            if len(pars) != self.nlabels and len(pars) != self.nlabels+1:
+                raise Exception('pars numpy array must be Nlabels or Nlabels+1 (with RV)')
+            labels = self.mklabels(pars)
+        else:
+            raise Exception('pars must be dict or numpy array')
+        
         # Get label array
         #  vrel is not in "pars", input separately
-        labels = self.mklabels(pars)
-            
+        #labels = self.mklabels(pars)
+
+        # Break out RV if needed
+        
+        #import pdb; pdb.set_trace()
+        
         # Are we making a fluxed spectrum?
         if fluxed is None:
             fluxed = self.fluxed
@@ -419,23 +453,11 @@ class BOSSANNModel():
     
     def model(self,wave,*pars,**kwargs):
         """ Model function for curve_fit."""
+        # PARS must be a numpy array or list and have elements equal to allparams
         if self.verbose:
             print('model: ',pars)
-            
-        # remove RV
-        #if len(pars)==len(self.allparams) and 'rv' in self.allparams:
-        if 'rv' in self.allparams:
-            labelparams = [item[1] for item in zip(self.allparams,pars) if item[0] != 'rv']
-            ind, = np.where(self.allparams=='rv')
-            vrel = pars[ind[0]]
-            kwargs['vrel'] = vrel
-        else:
-            labelparams = pars
-        try:
-            out = self(labelparams,**kwargs)
-        except:
-            print('model problems')
-            import pdb; pdb.set_trace()
+        # 
+        out = self(pars,**kwargs)
         self.nmodel += 1
         # Only return the flux
         if isinstance(out,Spec1D):
@@ -471,18 +493,18 @@ class BOSSANNModel():
 
         """
 
-        # add RV, if we are fitting it
-        if 'rv' in self.allparams:
-            # remove vrel at the end of args array
-            rvind, = np.where(self.allparams=='rv')
-            labelargs = np.array(args).copy()
-            labelargs = np.delete(labelargs,rvind)
-            fullargs = self.mklabels(labelargs)
-            # now add vrel value to it at the end
-            fullargs = np.hstack((fullargs,args[rvind[0]]))
-
-        else:
-            fullargs = self.mklabels(args)
+        ## add RV, if we are fitting it
+        #if 'rv' in self.allparams:
+        #    # remove vrel at the end of args array
+        #    rvind, = np.where(self.allparams=='rv')
+        #    labelargs = np.array(args).copy()
+        #    labelargs = np.delete(labelargs,rvind)
+        #    fullargs = self.mklabels(labelargs)
+        #    # now add vrel value to it at the end
+        #    fullargs = np.hstack((fullargs,args[rvind[0]]))
+        #
+        #else:
+        fullargs = self.mklabels(args)
             
         # logg relation
         #  add a dummy logg value in
@@ -560,16 +582,8 @@ class BOSSANNModel():
         lnlike : float
            The log likelihood value.
 
-        """        
-        # treat rv separately
-        if len(theta)==len(self.allparams) and 'rv' in self.allparams:
-            rvind, = np.where(self.allparams=='rv')
-            rv = theta[rvind][0]
-            ind, = np.where(self.allparams!='rv')
-            labels = np.array(theta)[ind]
-            m = self.model(spec.wave,*labels,spobs=spec,vrel=rv)
-        else:
-            m = self.model(spec.wave,*theta,spobs=spec)
+        """
+        m = self.model(spec.wave,*theta,spobs=spec)
         inv_sigma2 = 1.0/spec.err**2
         return -0.5*(np.sum((spec.flux-m)**2*inv_sigma2))
 
